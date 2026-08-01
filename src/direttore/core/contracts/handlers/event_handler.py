@@ -6,17 +6,22 @@ from dataclasses import dataclass
 from direttore.core.contracts.messages import Event
 from direttore.core.primitives.uow import BaseUnitOfWork
 
+from direttore.core.tracing import Span
+
 
 @dataclass(slots=True)
-class EventHandlerContext[UnitOfWorkT: BaseUnitOfWork]:
+class EventHandlerContext[
+    UnitOfWorkT: BaseUnitOfWork,
+    SpanT: Span
+]:
     uow: UnitOfWorkT
-
+    span: SpanT | None
 
 class EventHandler(ABC):
     @abstractmethod
-    async def __call__(
+    async def handle(
         self,
         event: Event,
-        context: EventHandlerContext[BaseUnitOfWork],
+        context: EventHandlerContext[BaseUnitOfWork, Span],
     ) -> None:
         raise NotImplementedError

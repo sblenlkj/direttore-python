@@ -2,57 +2,43 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from types import TracebackType
 from typing import Any
 
 
-class TraceResolver[TraceInputT, TraceT](ABC):
-    """Application-specific trace resolver contract.
+type SpanAttributes = Mapping[str, Any]
 
-    Trace resolution converts external trace input into an application-specific
-    trace object.
 
-    The application layer calls this before passing trace into engines,
-    dispatchers, or other orchestration runtime objects.
+class Span(ABC):
+    """Active node in a trace tree.
 
-    Examples of trace input:
+    A span represents one traced operation. It contains the backend-specific
+    state required to create child spans without receiving the original trace,
+    span factory, or an explicit parent span.
 
-    - HTTP headers with distributed tracing context;
-    - OpenTelemetry context extracted by an adapter;
-    - request id;
-    - existing in-memory trace object in tests;
-    - None, when execution starts without upstream trace context.
+    Child spans form the tracing tree:
 
-    The framework does not define the shape of trace input or resolved trace.
+        root span
+        └── child span
+            └── child span
+
+    Entering the span starts the operation. Exiting it finishes the operation
+    and records any exception raised inside the context.
     """
 
     @abstractmethod
-    def resolve_trace(
+    def child(
         self,
-        trace_input: TraceInputT | None,
-    ) -> TraceT | None:
+        *,
+        name: str,
+        attributes: SpanAttributes | None = None,
+    ) -> Span:
+        """Create a direct child of this span."""
         raise NotImplementedError
 
-
-class TraceSpan(ABC):
-    """Tracing span contract.
-
-    A span represents one measured execution block.
-
-    The framework can use spans around engine execution, handler execution,
-    event dispatching, resolver work, or other orchestration operations.
-
-    Spans may be nested. A child span should be started with `parent_span`
-    pointing to the currently active parent operation span.
-
-    Implementations may send data to OpenTelemetry, LangFuse, Phoenix,
-    structured logs, or any other tracing backend.
-
-    Implementations should return `False` from `__aexit__` unless they
-    intentionally want to suppress exceptions.
-    """
-
     @abstractmethod
-    async def __aenter__(self) -> TraceSpan:
+    async def __aenter__(self) -> Span:
+        """Start the span and return its active representation."""
         raise NotImplementedError
 
     @abstractmethod
@@ -60,8 +46,9 @@ class TraceSpan(ABC):
         self,
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
-        traceback: object,
+        traceback: TracebackType | None,
     ) -> bool:
+        """Finish the span and allow exceptions to propagate."""
         raise NotImplementedError
 
     @abstractmethod
@@ -70,48 +57,40 @@ class TraceSpan(ABC):
         key: str,
         value: Any,
     ) -> None:
+        """Set or replace an attribute on this span."""
         raise NotImplementedError
 
     @abstractmethod
     def add_event(
         self,
         name: str,
-        attributes: Mapping[str, Any] | None = None,
+        attributes: SpanAttributes | None = None,
     ) -> None:
+        """Add a timestamped event to this span."""
         raise NotImplementedError
 
 
-class Tracer[TraceT](ABC):
-    """Application-specific tracer contract.
+class SpanFactory[TraceT](ABC):
+    """Creates root spans.
 
-    The engine receives a resolved request/runtime `trace` object and uses
-    `Tracer` to create spans around orchestration operations.
+    A span factory is configured on an engine or another execution boundary.
+    It converts an application-specific trace value into a root span.
 
-    The framework does not define the shape of `TraceT`.
+    The framework intentionally does not define the structure of ``TraceT``.
+    It may be a dictionary, trace identifier, OpenTelemetry context, custom
+    application object, or any other backend-specific trace representation.
 
-    `TraceT` may be:
-
-    - a trace id;
-    - an OpenTelemetry context;
-    - a LangFuse trace/client object;
-    - a Phoenix trace object;
-    - a custom application trace object;
-    - `None` when tracing is disabled.
-
-    `parent_span` may be passed when the new span should be nested under an
-    existing operation span. This allows engines to create a root execution span
-    and dispatchers/repositories to create child spans inside that execution.
-
-    Implementations should create and return an async context manager span.
+    After the root span has been created, the trace and span factory should not
+    be propagated further. Child operations create spans through ``Span.child``.
     """
 
     @abstractmethod
-    def start_span(
+    def create_span(
         self,
         *,
         trace: TraceT | None,
         name: str,
-        attributes: Mapping[str, Any] | None = None,
-        parent_span: TraceSpan | None = None,
-    ) -> TraceSpan:
+        attributes: SpanAttributes | None = None,
+    ) -> Span:
+        """Create a root span for a new or continued trace."""
         raise NotImplementedError

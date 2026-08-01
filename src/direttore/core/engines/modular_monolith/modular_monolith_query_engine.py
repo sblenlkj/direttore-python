@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-from direttore.application.modular_monolith.config import (
-    ModularMonolithAuthConfig,
-    ModularMonolithSessionAuthConfig,
-)
+from collections.abc import Mapping
+from typing import Any
+
 from direttore.core.contracts.handlers import (
     QueryHandler,
     QueryHandlerContext,
     QueryHandlerResult,
 )
 from direttore.core.contracts.messages import Query
-from direttore.core.engines.modular_monolith.base_modular_monolith_engine import (
-    BaseModularMonolithEngine,
+from direttore.core.engines.base_engine import BaseQueryEngine
+from direttore.core.engines.modular_monolith.modular_monolith_config import (
+    ModularMonolithQueryEngineConfig,
+)
+from direttore.core.engines.modular_monolith.modular_monolith_payload_loader import (
+    ModularKeyPayloadLoader,
 )
 from direttore.core.modular_monolith_support.coordinator import (
     ModularUnitOfWorkCoordinator,
@@ -22,15 +25,7 @@ from direttore.core.modular_monolith_support.execution_runtime import (
 from direttore.core.modular_monolith_support.uow_routing_registries.query_uow_routing_registry import (
     QueryUowRoutingRegistry,
 )
-from direttore.core.modules.auth import (
-    ContextAuthenticator,
-    ModularAuthorizationLocationKind,
-    ModularAuthorizer,
-)
-from direttore.core.tracing import TraceSpan, Tracer
-from direttore.core.primitives.resource_holder import (
-    QueryResourceHolder,
-)
+from direttore.core.primitives.resource_holder import QueryResourceHolder
 from direttore.core.primitives.uow import BaseUnitOfWork
 from direttore.core.registries.registrations import (
     QueryHandlerRegistration,
@@ -38,145 +33,170 @@ from direttore.core.registries.registrations import (
 from direttore.core.resolvers.query_handler_resolver import (
     QueryHandlerResolver,
 )
-from direttore.core.resolvers.resolved_handlers import (
-    ResolvedHandler,
-)
+from direttore.core.resolvers.resolved_handlers import ResolvedHandler
+from direttore.core.tracing import Span, SpanFactory
 
 
-type ModularMonolithApplicationAuthConfig[AuthInputT, AuthT] = (
-    ModularMonolithAuthConfig[AuthInputT, AuthT]
-    | ModularMonolithSessionAuthConfig[AuthInputT, AuthT]
-    | None
-)
+type ResolvedQueryHandler = ResolvedHandler[
+    QueryHandler,
+    QueryHandlerRegistration,
+]
 
 
-class ModularMonolithQueryEngine[AuthInputT, AuthT, TraceT](
-    BaseModularMonolithEngine[AuthInputT, AuthT, TraceT],
-):
+class ModularMonolithQueryEngine(BaseQueryEngine):
     def __init__(
         self,
         *,
         resolver: QueryHandlerResolver,
         query_uow_routing: QueryUowRoutingRegistry,
+        span_factory: SpanFactory[object] | None = None,
+        config: ModularMonolithQueryEngineConfig | None = None,
     ) -> None:
-        super().__init__()
         self.resolver = resolver
         self.query_uow_routing = query_uow_routing
+        self.span_factory = span_factory
+        self.config = config or ModularMonolithQueryEngineConfig()
 
     async def handle(
         self,
         *,
         query: Query,
+        input: object,
         resource_holder: QueryResourceHolder,
         coordinator: ModularUnitOfWorkCoordinator,
-        runtime: ModularMonolithExecutionRuntime[AuthT, TraceT],
-        auth_config: ModularMonolithApplicationAuthConfig[
-            AuthInputT,
-            AuthT,
-        ] = None,
-        auth_input: AuthInputT | None = None,
-        trace: TraceT | None = None,
-        tracer: Tracer[TraceT] | None = None,
+        runtime: ModularMonolithExecutionRuntime,
+        trace: object | None = None,
     ) -> QueryHandlerResult:
-        runtime.set_trace(trace)
-        runtime.clear_auth()
-        runtime.clear_parent_span()
+        self._prepare_execution(runtime)
 
         try:
             resolved = self.resolver.resolve(
                 type(query),
-                overrides=runtime.dependency_overrides,
+                overrides=runtime._get_dependency_overrides(),
             )
-            handler_config = resolved.registration.config
 
-            if isinstance(
-                auth_config,
-                ModularMonolithSessionAuthConfig,
-            ):
-                return await self._handle_with_context_authentication(
-                    query=query,
-                    resolved=resolved,
+            return await self._handle_resolved(
+                query=query,
+                input=input,
+                resolved=resolved,
+                resource_holder=resource_holder,
+                coordinator=coordinator,
+                runtime=runtime,
+                trace=trace,
+            )
+        finally:
+            self._finish_execution(runtime)
+
+    async def handle_by_key(
+        self,
+        *,
+        key: str,
+        payload: Mapping[str, Any],
+        input: object,
+        resource_holder: QueryResourceHolder,
+        coordinator: ModularUnitOfWorkCoordinator,
+        runtime: ModularMonolithExecutionRuntime,
+        trace: object | None = None,
+    ) -> QueryHandlerResult:
+        self._prepare_execution(runtime)
+
+        try:
+            query, resolved = self._resolve_query_by_key(
+                key=key,
+                payload=payload,
+                runtime=runtime,
+            )
+
+            return await self._handle_resolved(
+                query=query,
+                input=input,
+                resolved=resolved,
+                resource_holder=resource_holder,
+                coordinator=coordinator,
+                runtime=runtime,
+                trace=trace,
+            )
+        finally:
+            self._finish_execution(runtime)
+
+    async def handle_operation(
+        self,
+        *,
+        operation_id: int | str,
+        input: object,
+        resource_holder: QueryResourceHolder,
+        coordinator: ModularUnitOfWorkCoordinator,
+        runtime: ModularMonolithExecutionRuntime,
+        trace: object | None = None,
+    ) -> QueryHandlerResult:
+        self._prepare_execution(runtime)
+
+        try:
+            if self.span_factory is None:
+                return await self._execute_operation(
+                    operation_id=operation_id,
+                    input=input,
                     resource_holder=resource_holder,
                     coordinator=coordinator,
                     runtime=runtime,
-                    auth_config=auth_config,
-                    auth_input=auth_input,
-                    allowed_access_tags=handler_config.allowed_access_tags,
-                    trace=trace,
-                    tracer=tracer,
+                    span=None,
                 )
 
-            auth = await self._authenticate_without_context(
-                authenticator=(
-                    None
-                    if auth_config is None
-                    else auth_config.authenticator
-                ),
-                auth_input=auth_input,
-            )
-
-            runtime.set_auth(auth)
-
-            self._authorize_user_request(
-                allowed_access_tags=handler_config.allowed_access_tags,
-                auth=auth,
-                authorizer=(
-                    None
-                    if auth_config is None
-                    else auth_config.authorizer
-                ),
-            )
-
-            return await self._handle_with_resolved_auth(
-                query=query,
-                resolved=resolved,
-                resource_holder=resource_holder,
-                coordinator=coordinator,
-                runtime=runtime,
-                auth=auth,
+            async with self.span_factory.create_span(
                 trace=trace,
-                tracer=tracer,
-            )
+                name=(
+                    "modular.query.handle_operation "
+                    f"{operation_id}"
+                ),
+                attributes={
+                    "operation.id": operation_id,
+                    "operation.kind": "stored_query",
+                },
+            ) as span:
+                span.add_event(
+                    "modular.query.operation.started"
+                )
+
+                result = await self._execute_operation(
+                    operation_id=operation_id,
+                    input=input,
+                    resource_holder=resource_holder,
+                    coordinator=coordinator,
+                    runtime=runtime,
+                    span=span,
+                )
+
+                span.add_event(
+                    "modular.query.operation.finished"
+                )
         finally:
-            runtime.clear_auth()
-            runtime.clear_trace()
-            runtime.clear_parent_span()
+            self._finish_execution(runtime)
 
-    async def _handle_with_context_authentication(
+        return result
+
+    async def _handle_resolved(
         self,
         *,
         query: Query,
-        resolved: ResolvedHandler[
-            QueryHandler,
-            QueryHandlerRegistration,
-        ],
+        input: object,
+        resolved: ResolvedQueryHandler,
         resource_holder: QueryResourceHolder,
         coordinator: ModularUnitOfWorkCoordinator,
-        runtime: ModularMonolithExecutionRuntime[AuthT, TraceT],
-        auth_config: ModularMonolithSessionAuthConfig[
-            AuthInputT,
-            AuthT,
-        ],
-        auth_input: AuthInputT | None,
-        allowed_access_tags: frozenset[str] | None,
-        trace: TraceT | None,
-        tracer: Tracer[TraceT] | None,
+        runtime: ModularMonolithExecutionRuntime,
+        trace: object | None,
     ) -> QueryHandlerResult:
-        if tracer is None:
-            return await self._execute_with_context_authentication(
+        if self.span_factory is None:
+            return await self._execute(
                 query=query,
+                input=input,
                 resolved=resolved,
                 resource_holder=resource_holder,
                 coordinator=coordinator,
                 runtime=runtime,
-                auth_config=auth_config,
-                auth_input=auth_input,
-                allowed_access_tags=allowed_access_tags,
-                trace=trace,
-                parent_span=None,
+                span=None,
             )
 
-        async with tracer.start_span(
+        async with self.span_factory.create_span(
             trace=trace,
             name=self._build_span_name(
                 operation="modular.query.handle",
@@ -189,226 +209,189 @@ class ModularMonolithQueryEngine[AuthInputT, AuthT, TraceT](
                 key=resolved.registration.key,
             ),
         ) as span:
-            span.add_event("modular.query.execution.started")
+            span.add_event(
+                "modular.query.execution.started"
+            )
 
-            result = await self._execute_with_context_authentication(
+            result = await self._execute(
                 query=query,
+                input=input,
                 resolved=resolved,
                 resource_holder=resource_holder,
                 coordinator=coordinator,
                 runtime=runtime,
-                auth_config=auth_config,
-                auth_input=auth_input,
-                allowed_access_tags=allowed_access_tags,
-                trace=trace,
-                parent_span=span,
+                span=span,
             )
 
-            span.add_event("modular.query.execution.finished")
+            span.add_event(
+                "modular.query.execution.finished"
+            )
 
         return result
 
-    async def _handle_with_resolved_auth(
+    async def _execute(
         self,
         *,
         query: Query,
-        resolved: ResolvedHandler[
-            QueryHandler,
-            QueryHandlerRegistration,
-        ],
+        input: object,
+        resolved: ResolvedQueryHandler,
         resource_holder: QueryResourceHolder,
         coordinator: ModularUnitOfWorkCoordinator,
-        runtime: ModularMonolithExecutionRuntime[AuthT, TraceT],
-        auth: AuthT | None,
-        trace: TraceT | None,
-        tracer: Tracer[TraceT] | None,
-    ) -> QueryHandlerResult:
-        if tracer is None:
-            return await self._execute_with_resolved_auth(
-                query=query,
-                resolved=resolved,
-                resource_holder=resource_holder,
-                coordinator=coordinator,
-                runtime=runtime,
-                auth=auth,
-                trace=trace,
-                parent_span=None,
-            )
-
-        async with tracer.start_span(
-            trace=trace,
-            name=self._build_span_name(
-                operation="modular.query.handle",
-                message=query,
-            ),
-            attributes=self._build_span_attributes(
-                message=query,
-                handler_type=resolved.handler_type,
-                source_name=resolved.registration.source_name,
-                key=resolved.registration.key,
-            ),
-        ) as span:
-            span.add_event("modular.query.execution.started")
-
-            result = await self._execute_with_resolved_auth(
-                query=query,
-                resolved=resolved,
-                resource_holder=resource_holder,
-                coordinator=coordinator,
-                runtime=runtime,
-                auth=auth,
-                trace=trace,
-                parent_span=span,
-            )
-
-            span.add_event("modular.query.execution.finished")
-
-        return result
-
-    async def _execute_with_context_authentication(
-        self,
-        *,
-        query: Query,
-        resolved: ResolvedHandler[
-            QueryHandler,
-            QueryHandlerRegistration,
-        ],
-        resource_holder: QueryResourceHolder,
-        coordinator: ModularUnitOfWorkCoordinator,
-        runtime: ModularMonolithExecutionRuntime[AuthT, TraceT],
-        auth_config: ModularMonolithSessionAuthConfig[
-            AuthInputT,
-            AuthT,
-        ],
-        auth_input: AuthInputT | None,
-        allowed_access_tags: frozenset[str] | None,
-        trace: TraceT | None,
-        parent_span: TraceSpan | None,
+        runtime: ModularMonolithExecutionRuntime,
+        span: Span | None,
     ) -> QueryHandlerResult:
         root_uow = self._get_root_uow(
             resolved=resolved,
             coordinator=coordinator,
         )
 
-        auth_uow_type = auth_config.query_uow_type
-        if auth_uow_type is None:
+        async with resource_holder:
+            lifecycle_context = (
+                await resolved.registration.lifecycle.create_context(
+                    input,
+                    resolved.registration.config,
+                    coordinator,
+                )
+            )
+
+            runtime._set_lifecycle_context(
+                lifecycle_context,
+            )
+
+            context = QueryHandlerContext(
+                uow=root_uow,
+                lifecycle_context=lifecycle_context,
+                span=span,
+            )
+
+            result = await resolved.handler.handle(
+                query,
+                context,
+            )
+        return result
+
+    async def _execute_operation(
+        self,
+        *,
+        operation_id: int | str,
+        input: object,
+        resource_holder: QueryResourceHolder,
+        coordinator: ModularUnitOfWorkCoordinator,
+        runtime: ModularMonolithExecutionRuntime,
+        span: Span | None,
+    ) -> QueryHandlerResult:
+        payload_loader = self._require_payload_key_loader()
+
+        async with resource_holder:
+            key_payload_pair = (
+                await payload_loader.get_key_payload_pair(
+                    operation_id,
+                    coordinator,
+                )
+            )
+
+            query, resolved = self._resolve_query_by_key(
+                key=key_payload_pair.key,
+                payload=key_payload_pair.payload,
+                runtime=runtime,
+            )
+
+            root_uow = self._get_root_uow(
+                resolved=resolved,
+                coordinator=coordinator,
+            )
+
+            if span is not None:
+                span.set_attribute(
+                    "operation.key",
+                    key_payload_pair.key,
+                )
+
+                span.add_event(
+                    "modular.use_case.operation.loaded"
+                )
+
+            lifecycle_context = (
+                await resolved.registration.lifecycle.create_context(
+                    input,
+                    resolved.registration.config,
+                    coordinator,
+                )
+            )
+
+            runtime._set_lifecycle_context(
+                lifecycle_context,
+            )
+
+            context = QueryHandlerContext(
+                uow=root_uow,
+                lifecycle_context=lifecycle_context,
+                span=span,
+            )
+
+            result = await resolved.handler.handle(
+                query,
+                context,
+            )
+        return result
+
+    def _resolve_query_by_key(
+        self,
+        *,
+        key: str,
+        payload: Mapping[str, Any],
+        runtime: ModularMonolithExecutionRuntime,
+    ) -> tuple[Query, ResolvedQueryHandler]:
+        resolved = self.resolver.resolve_by_key(
+            key,
+            overrides=runtime._get_dependency_overrides(),
+        )
+
+        query = self._build_query_from_payload(
+            key=key,
+            payload=payload,
+            query_type=resolved.registration.query_type,
+        )
+
+        return query, resolved
+
+    def _require_payload_key_loader(
+        self,
+    ) -> ModularKeyPayloadLoader:
+        if self.config.payload_key_loader is None:
             raise RuntimeError(
-                "Context authentication for query execution requires "
-                "query_uow_type."
+                "Modular monolith query operation execution is not "
+                "configured. handle_operation(...) requires "
+                "payload_key_loader."
             )
 
-        auth_uow = coordinator.get_query_uow(auth_uow_type)
-
-        async with resource_holder:
-            auth = await self._authenticate_with_context(
-                authenticator=auth_config.authenticator,
-                auth_input=auth_input,
-                uow=auth_uow,
-            )
-
-            runtime.set_auth(auth)
-            runtime.set_parent_span(parent_span)
-
-            self._authorize_user_request(
-                allowed_access_tags=allowed_access_tags,
-                auth=auth,
-                authorizer=auth_config.authorizer,
-            )
-
-            result = await self._call_handler(
-                query=query,
-                resolved=resolved,
-                uow=root_uow,
-                auth=auth,
-                trace=trace,
-            )
-
-        return result
-
-    async def _execute_with_resolved_auth(
-        self,
-        *,
-        query: Query,
-        resolved: ResolvedHandler[
-            QueryHandler,
-            QueryHandlerRegistration,
-        ],
-        resource_holder: QueryResourceHolder,
-        coordinator: ModularUnitOfWorkCoordinator,
-        runtime: ModularMonolithExecutionRuntime[AuthT, TraceT],
-        auth: AuthT | None,
-        trace: TraceT | None,
-        parent_span: TraceSpan | None,
-    ) -> QueryHandlerResult:
-        root_uow = self._get_root_uow(
-            resolved=resolved,
-            coordinator=coordinator,
-        )
-
-        async with resource_holder:
-            runtime.set_auth(auth)
-            runtime.set_parent_span(parent_span)
-
-            result = await self._call_handler(
-                query=query,
-                resolved=resolved,
-                uow=root_uow,
-                auth=auth,
-                trace=trace,
-            )
-
-        return result
-
-    async def _call_handler(
-        self,
-        *,
-        query: Query,
-        resolved: ResolvedHandler[
-            QueryHandler,
-            QueryHandlerRegistration,
-        ],
-        uow: BaseUnitOfWork,
-        auth: AuthT | None,
-        trace: TraceT | None,
-    ) -> QueryHandlerResult:
-        context = QueryHandlerContext(
-            uow=uow,
-            auth=auth,
-            tracer=trace,
-        )
-
-        return await resolved.handler(
-            query,
-            context,
-        )
+        return self.config.payload_key_loader
 
     def _get_root_uow(
         self,
         *,
-        resolved: ResolvedHandler[
-            QueryHandler,
-            QueryHandlerRegistration,
-        ],
+        resolved: ResolvedQueryHandler,
         coordinator: ModularUnitOfWorkCoordinator,
     ) -> BaseUnitOfWork:
-        root_uow_type = self.query_uow_routing.get_uow_type_by_handler_type(
-            resolved.handler_type,
+        root_uow_type = (
+            self.query_uow_routing
+            .get_uow_type_by_handler_type(
+                resolved.handler_type,
+            )
         )
 
-        return coordinator.get_query_uow(root_uow_type)
+        return coordinator.get_query_uow(
+            root_uow_type,
+        )
 
-    def _authorize_user_request(
-        self,
-        *,
-        allowed_access_tags: frozenset[str] | None,
-        auth: AuthT | None,
-        authorizer: ModularAuthorizer[AuthT] | None,
+    @staticmethod
+    def _prepare_execution(
+        runtime: ModularMonolithExecutionRuntime,
     ) -> None:
-        if authorizer is None:
-            return
+        runtime._set_lifecycle_context(None)
 
-        authorizer.authorize(
-            allowed_access_tags=allowed_access_tags,
-            auth=auth,
-            location_kind=ModularAuthorizationLocationKind.USER_REQUEST,
-        )
+    @staticmethod
+    def _finish_execution(
+        runtime: ModularMonolithExecutionRuntime,
+    ) -> None:
+        runtime._set_lifecycle_context(None)

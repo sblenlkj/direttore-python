@@ -59,7 +59,7 @@ class QueryHandlerResolver(
     ) -> ResolvedHandler[QueryHandler, QueryHandlerRegistration]:
         registration = self.registry.get_registration(query_type)
 
-        return super().resolve(
+        return super().resolve_registration(
             registration=registration,
             overrides=overrides,
         )
@@ -72,7 +72,7 @@ class QueryHandlerResolver(
     ) -> ResolvedHandler[QueryHandler, QueryHandlerRegistration]:
         registration = self.registry.get_registration_by_key(key)
 
-        return super().resolve(
+        return super().resolve_registration(
             registration=registration,
             overrides=overrides,
         )

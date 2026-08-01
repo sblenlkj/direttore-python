@@ -5,6 +5,7 @@ from typing import Any
 
 from direttore.application.execution_slot_pool import (
     ExecutionSlotPool,
+    ExecutionSlotPoolStats,
 )
 from direttore.application.modular_monolith.config import (
     ModularMonolithDirettoreConfig,
@@ -17,10 +18,7 @@ from direttore.core.contracts.handlers import (
     QueryHandlerResult,
     UseCaseHandlerResult,
 )
-from direttore.core.contracts.messages import (
-    Query,
-    UseCaseCommand,
-)
+from direttore.core.contracts.messages import Query, UseCaseCommand
 from direttore.core.engines.modular_monolith.modular_monolith_query_engine import (
     ModularMonolithQueryEngine,
 )
@@ -31,7 +29,11 @@ from direttore.core.event_dispatchers.modular_monolith_event_dispatcher import (
     ModularMonolithEventDispatcher,
 )
 from direttore.core.modular_monolith_support.execution_dependencies import (
+    ModularMonolithExecutionDependencyContext,
     ModularMonolithExecutionDependencyRegistry,
+)
+from direttore.core.modular_monolith_support.execution_runtime import (
+    ModularMonolithExecutionRuntime,
 )
 from direttore.core.modular_monolith_support.uow_routing_registries.base_uow_routing_registry import (
     UowRoutingRegistryItem,
@@ -45,8 +47,8 @@ from direttore.core.modular_monolith_support.uow_routing_registries.query_uow_ro
 from direttore.core.modular_monolith_support.uow_routing_registries.use_case_uow_routing_registry import (
     UseCaseUowRoutingRegistry,
 )
-from direttore.core.tracing import Tracer
 from direttore.core.primitives.container import Container
+from direttore.core.primitives.event_queue import EventQueue
 from direttore.core.registries.event_handler_registry import (
     EventHandlerRegistry,
 )
@@ -67,21 +69,11 @@ from direttore.core.resolvers.use_case_handler_resolver import (
 )
 
 
-class ModularMonolithDirettoreApplication[
-    AuthInputT,
-    AuthT,
-    TraceInputT,
-    TraceT,
-]:
+class ModularMonolithDirettoreApplication:
     def __init__(
         self,
         *,
-        config: ModularMonolithDirettoreConfig[
-            AuthInputT,
-            AuthT,
-            TraceInputT,
-            TraceT,
-        ],
+        config: ModularMonolithDirettoreConfig,
         container: Container,
         execution_dependencies_registry: (
             ModularMonolithExecutionDependencyRegistry | None
@@ -93,22 +85,29 @@ class ModularMonolithDirettoreApplication[
         self.container = container
         self.execution_dependencies_registry = execution_dependencies_registry
 
-        execution_dependency_types: set[type[Any]] = set()
-        if execution_dependencies_registry is not None:
-            execution_dependency_types = (
-                execution_dependencies_registry.registered_dependency_types()
-            )
+        execution_dependency_types = self._get_execution_dependency_types()
 
         use_case_registry = self._build_use_case_registry(
             contexts=self.config.contexts,
         )
-        use_case_uow_routing = self._build_use_case_uow_routing(
+        query_registry = self._build_query_registry(
             contexts=self.config.contexts,
         )
 
-        use_case_resolver = UseCaseHandlerResolver(
+        self.use_case_uow_routing = self._build_use_case_uow_routing(
+            contexts=self.config.contexts,
+        )
+        self.query_uow_routing = self._build_query_uow_routing(
+            contexts=self.config.contexts,
+        )
+
+        self.use_case_resolver = UseCaseHandlerResolver(
             registry=use_case_registry,
             container=self.container,
+            execution_dependency_types=execution_dependency_types,
+        )
+        self.query_resolver = self._build_query_resolver(
+            registry=query_registry,
             execution_dependency_types=execution_dependency_types,
         )
 
@@ -117,25 +116,16 @@ class ModularMonolithDirettoreApplication[
             execution_dependency_types=execution_dependency_types,
         )
 
-        self.use_case_engine = ModularMonolithUseCaseEngine[
-            AuthInputT,
-            AuthT,
-            TraceT,
-        ](
-            resolver=use_case_resolver,
-            use_case_uow_routing=use_case_uow_routing,
+        self.use_case_engine = ModularMonolithUseCaseEngine(
+            resolver=self.use_case_resolver,
+            use_case_uow_routing=self.use_case_uow_routing,
             event_dispatcher=self.event_dispatcher,
+            span_factory=self.config.span_factory,
             config=self.config.use_case_engine,
         )
+        self.query_engine = self._build_query_engine()
 
-        self.query_engine = self._build_query_engine(
-            contexts=self.config.contexts,
-            execution_dependency_types=execution_dependency_types,
-        )
-
-        self.slot_pool = ExecutionSlotPool[
-            ModularMonolithExecutionSlot[AuthInputT, AuthT, TraceT]
-        ](
+        self.slot_pool = ExecutionSlotPool[ModularMonolithExecutionSlot](
             slot_factory=self._create_slot,
             initial_slot_count=initial_slot_count,
             max_slot_count=max_slot_count,
@@ -145,103 +135,106 @@ class ModularMonolithDirettoreApplication[
         self,
         command: UseCaseCommand,
         *,
-        auth_input: AuthInputT | None = None,
-        trace_input: TraceInputT | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> UseCaseHandlerResult:
-        slot = await self.slot_pool.acquire()
-
-        try:
-            trace = self._resolve_trace(trace_input)
-
+        async with self.slot_pool.acquire() as slot:
             return await slot.handle(
                 command=command,
-                auth_config=self.config.auth,
-                auth_input=auth_input,
+                input=input,
                 trace=trace,
-                tracer=self._get_tracer(),
             )
-        finally:
-            await self.slot_pool.release(slot)
 
     async def handle_by_key(
         self,
         key: str,
         payload: Mapping[str, Any],
         *,
-        auth_input: AuthInputT | None = None,
-        trace_input: TraceInputT | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> UseCaseHandlerResult:
-        slot = await self.slot_pool.acquire()
-
-        try:
-            trace = self._resolve_trace(trace_input)
-
+        async with self.slot_pool.acquire() as slot:
             return await slot.handle_by_key(
                 key=key,
                 payload=payload,
-                auth_config=self.config.auth,
-                auth_input=auth_input,
+                input=input,
                 trace=trace,
-                tracer=self._get_tracer(),
             )
-        finally:
-            await self.slot_pool.release(slot)
+
+    async def handle_operation(
+        self,
+        operation_id: int | str,
+        *,
+        input: object,
+        trace: object | None = None,
+    ) -> UseCaseHandlerResult:
+        async with self.slot_pool.acquire() as slot:
+            return await slot.handle_operation(
+                operation_id=operation_id,
+                input=input,
+                trace=trace,
+            )
+
 
     async def handle_query(
         self,
         query: Query,
         *,
-        auth_input: AuthInputT | None = None,
-        trace_input: TraceInputT | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> QueryHandlerResult:
         if self.query_engine is None:
             raise RuntimeError(
                 "Modular monolith query execution is not configured."
             )
 
-        slot = await self.slot_pool.acquire()
-
-        try:
-            trace = self._resolve_trace(trace_input)
-
+        async with self.slot_pool.acquire() as slot:
             return await slot.handle_query(
                 query=query,
-                auth_config=self.config.auth,
-                auth_input=auth_input,
+                input=input,
                 trace=trace,
-                tracer=self._get_tracer(),
             )
-        finally:
-            await self.slot_pool.release(slot)
 
     async def handle_query_by_key(
         self,
         key: str,
         payload: Mapping[str, Any],
         *,
-        auth_input: AuthInputT | None = None,
-        trace_input: TraceInputT | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> QueryHandlerResult:
         if self.query_engine is None:
             raise RuntimeError(
                 "Modular monolith query execution is not configured."
             )
 
-        slot = await self.slot_pool.acquire()
-
-        try:
-            trace = self._resolve_trace(trace_input)
-
+        async with self.slot_pool.acquire() as slot:
             return await slot.handle_query_by_key(
                 key=key,
                 payload=payload,
-                auth_config=self.config.auth,
-                auth_input=auth_input,
+                input=input,
                 trace=trace,
-                tracer=self._get_tracer(),
             )
-        finally:
-            await self.slot_pool.release(slot)
+
+    async def handle_query_operation(
+        self,
+        operation_id: int | str,
+        *,
+        input: object,
+        trace: object | None = None,
+    ) -> QueryHandlerResult:
+        if self.query_engine is None:
+            raise RuntimeError(
+                "Simple service query execution is not configured."
+            )
+
+        async with self.slot_pool.acquire() as slot:
+            return await slot.handle_query_operation(
+                operation_id=operation_id,
+                input=input,
+                trace=trace,
+            )
+
 
     def validate(self) -> None:
         self.use_case_engine.resolver.validate()
@@ -252,19 +245,68 @@ class ModularMonolithDirettoreApplication[
         if self.event_dispatcher is not None:
             self.event_dispatcher.validate_event_handlers()
 
-    def slot_pool_stats(self):
+    def slot_pool_stats(self) -> ExecutionSlotPoolStats:
         return self.slot_pool.stats()
 
     def _create_slot(
         self,
-    ) -> ModularMonolithExecutionSlot[AuthInputT, AuthT, TraceT]:
+    ) -> ModularMonolithExecutionSlot:
+        use_case_resource_holder = (
+            self.config.slot.use_case_resource_holder_factory()
+        )
+
+        query_resource_holder = None
+        if self.config.slot.query_resource_holder_factory is not None:
+            query_resource_holder = (
+                self.config.slot.query_resource_holder_factory()
+            )
+
+        coordinator = self.config.slot.coordinator_factory(
+            use_case_resource_holder,
+            query_resource_holder,
+        )
+        event_queue = EventQueue()
+
+        runtime = ModularMonolithExecutionRuntime(
+            coordinator=coordinator,
+            event_queue=event_queue,
+            use_case_resolver=self.use_case_resolver,
+            use_case_uow_routing=self.use_case_uow_routing,
+            query_resolver=self.query_resolver,
+            query_uow_routing=self.query_uow_routing,
+        )
+
+        if self.execution_dependencies_registry is not None:
+            dependency_overrides = dict(
+                self.execution_dependencies_registry.build_overrides(
+                    context=ModularMonolithExecutionDependencyContext(
+                        runtime=runtime,
+                    ),
+                )
+            )
+            runtime._set_dependency_overrides(
+                dependency_overrides,
+            )
+
         return ModularMonolithExecutionSlot(
-            slot_config=self.config.slot,
             use_case_engine=self.use_case_engine,
+            use_case_resource_holder=use_case_resource_holder,
+            coordinator=coordinator,
+            runtime=runtime,
+            event_queue=event_queue,
             query_engine=self.query_engine,
-            auth_config=self.config.auth,
-            tracer=self._get_tracer(),
-            dependency_registry=self.execution_dependencies_registry,
+            query_resource_holder=query_resource_holder,
+        )
+
+    def _get_execution_dependency_types(
+        self,
+    ) -> set[type[Any]]:
+        if self.execution_dependencies_registry is None:
+            return set()
+
+        return (
+            self.execution_dependencies_registry
+            .registered_dependency_types()
         )
 
     def _build_use_case_registry(
@@ -274,7 +316,8 @@ class ModularMonolithDirettoreApplication[
     ) -> UseCaseHandlerRegistry:
         return UseCaseHandlerRegistry.merge_many(
             registries=[
-                context.use_case_registry for context in contexts
+                context.use_case_registry
+                for context in contexts
             ],
             source_name="modular_monolith",
         )
@@ -350,7 +393,9 @@ class ModularMonolithDirettoreApplication[
         if not items:
             return None
 
-        return QueryUowRoutingRegistry.from_registry_items(items)
+        return QueryUowRoutingRegistry.from_registry_items(
+            items,
+        )
 
     def _build_event_uow_routing(
         self,
@@ -369,52 +414,47 @@ class ModularMonolithDirettoreApplication[
         if not items:
             return None
 
-        return EventUowRoutingRegistry.from_registry_items(items)
+        return EventUowRoutingRegistry.from_registry_items(
+            items,
+        )
 
-    def _build_query_engine(
+    def _build_query_resolver(
         self,
         *,
-        contexts: list[ModularMonolithDirettoreContext],
-        execution_dependency_types: set[type[Any]] | None = None,
-    ) -> ModularMonolithQueryEngine[AuthInputT, AuthT, TraceT] | None:
-        query_registry = self._build_query_registry(
-            contexts=contexts,
-        )
-
-        if query_registry is None:
+        registry: QueryHandlerRegistry | None,
+        execution_dependency_types: set[type[Any]],
+    ) -> QueryHandlerResolver | None:
+        if registry is None:
             return None
 
-        query_uow_routing = self._build_query_uow_routing(
-            contexts=contexts,
-        )
-
-        if query_uow_routing is None:
-            raise RuntimeError(
-                "Query registry is configured, but query UoW routing could "
-                "not be built."
-            )
-
-        query_resolver = QueryHandlerResolver(
-            registry=query_registry,
+        return QueryHandlerResolver(
+            registry=registry,
             container=self.container,
             execution_dependency_types=execution_dependency_types,
         )
 
-        return ModularMonolithQueryEngine[
-            AuthInputT,
-            AuthT,
-            TraceT,
-        ](
-            resolver=query_resolver,
-            query_uow_routing=query_uow_routing,
+    def _build_query_engine(
+        self,
+    ) -> ModularMonolithQueryEngine | None:
+        if (
+            self.query_resolver is None
+            or self.query_uow_routing is None
+        ):
+            return None
+
+        return ModularMonolithQueryEngine(
+            resolver=self.query_resolver,
+            query_uow_routing=self.query_uow_routing,
+            span_factory=self.config.span_factory,
+            config=self.config.query_engine,
         )
 
     def _build_event_dispatcher(
         self,
         *,
         contexts: list[ModularMonolithDirettoreContext],
-        execution_dependency_types: set[type[Any]] | None = None,
-    ) -> ModularMonolithEventDispatcher[TraceT] | None:
+        execution_dependency_types: set[type[Any]],
+    ) -> ModularMonolithEventDispatcher | None:
         event_registry = self._build_event_registry(
             contexts=contexts,
         )
@@ -438,27 +478,7 @@ class ModularMonolithDirettoreApplication[
             execution_dependency_types=execution_dependency_types,
         )
 
-        return ModularMonolithEventDispatcher[TraceT](
+        return ModularMonolithEventDispatcher(
             resolver=event_resolver,
             event_uow_routing=event_uow_routing,
         )
-
-    def _resolve_trace(
-        self,
-        trace_input: TraceInputT | None,
-    ) -> TraceT | None:
-        if self.config.tracing is None:
-            return None
-
-        if self.config.tracing.trace_resolver is None:
-            return None
-
-        return self.config.tracing.trace_resolver.resolve_trace(
-            trace_input,
-        )
-
-    def _get_tracer(self) -> Tracer[TraceT] | None:
-        if self.config.tracing is None:
-            return None
-
-        return self.config.tracing.tracer

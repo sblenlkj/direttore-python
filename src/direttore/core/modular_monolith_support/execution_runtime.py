@@ -4,15 +4,14 @@ from collections.abc import Mapping
 from typing import Any
 
 from direttore.core.contracts.handlers import (
+    QueryHandler,
     QueryHandlerContext,
     QueryHandlerResult,
+    UseCaseHandler,
     UseCaseHandlerContext,
     UseCaseHandlerResult,
 )
-from direttore.core.contracts.messages import (
-    Query,
-    UseCaseCommand,
-)
+from direttore.core.contracts.messages import Query, UseCaseCommand
 from direttore.core.modular_monolith_support.coordinator import (
     ModularUnitOfWorkCoordinator,
 )
@@ -22,37 +21,31 @@ from direttore.core.modular_monolith_support.uow_routing_registries.query_uow_ro
 from direttore.core.modular_monolith_support.uow_routing_registries.use_case_uow_routing_registry import (
     UseCaseUowRoutingRegistry,
 )
-from direttore.core.modules.auth import (
-    ModularAuthorizationLocationKind,
-    ModularAuthorizer,
-)
-from direttore.core.tracing import TraceSpan, Tracer
 from direttore.core.primitives.event_queue import EventQueue
+from direttore.core.primitives.uow import BaseUnitOfWork
+from direttore.core.registries.registrations import (
+    QueryHandlerRegistration,
+    UseCaseHandlerRegistration,
+)
 from direttore.core.resolvers.query_handler_resolver import (
     QueryHandlerResolver,
 )
+from direttore.core.resolvers.resolved_handlers import ResolvedHandler
 from direttore.core.resolvers.use_case_handler_resolver import (
     UseCaseHandlerResolver,
 )
+from direttore.core.tracing import Span
 
 
-class ModularMonolithExecutionRuntime[AuthT, TraceT]:
-    """Slot-owned internal execution runtime.
+class ModularMonolithExecutionRuntime:
+    """Slot-owned runtime for in-process bounded-context invocations.
 
-    The runtime is used by execution-scoped in-process clients inside handlers:
+    The runtime owns routing dependencies, dependency overrides, the event
+    queue, and the lifecycle context installed by the active engine execution.
 
-        await runtime.invoke(command)
-        await runtime.invoke_query(query)
-
-    It belongs to one execution slot and keeps slot-scope dependency overrides.
-    Per request/execution it receives mutable execution state:
-
-        auth
-        trace
-        parent_span
-
-    The runtime does not create Unit of Work objects. It asks the slot-owned
-    ModularUnitOfWorkCoordinator for already registered UoW instances.
+    Tracing state is never stored in the runtime. A caller may pass its current
+    span to invoke(...) or invoke_query(...). The runtime then creates a child
+    span representing the bounded-context invocation.
     """
 
     def __init__(
@@ -64,101 +57,58 @@ class ModularMonolithExecutionRuntime[AuthT, TraceT]:
         use_case_uow_routing: UseCaseUowRoutingRegistry,
         query_resolver: QueryHandlerResolver | None = None,
         query_uow_routing: QueryUowRoutingRegistry | None = None,
-        authorizer: ModularAuthorizer[AuthT] | None = None,
-        tracer: Tracer[TraceT] | None = None,
         dependency_overrides: Mapping[type[Any], Any] | None = None,
     ) -> None:
         self._coordinator = coordinator
         self._event_queue = event_queue
 
         self._use_case_resolver = use_case_resolver
-        self._query_resolver = query_resolver
-
         self._use_case_uow_routing = use_case_uow_routing
+
+        self._query_resolver = query_resolver
         self._query_uow_routing = query_uow_routing
 
-        self._authorizer = authorizer
-        self._tracer = tracer
+        self._dependency_overrides = dependency_overrides
+        self._lifecycle_context: object | None = None
 
-        self._dependency_overrides: Mapping[type[Any], Any] | None = (
-            dependency_overrides
-        )
-        self._auth: AuthT | None = None
-        self._trace: TraceT | None = None
-        self._parent_span: TraceSpan | None = None
-
-    @property
-    def auth(self) -> AuthT | None:
-        return self._auth
-
-    @property
-    def trace(self) -> TraceT | None:
-        return self._trace
-
-    @property
-    def parent_span(self) -> TraceSpan | None:
-        return self._parent_span
-
-    @property
-    def dependency_overrides(self) -> Mapping[type[Any], Any] | None:
+    def _get_dependency_overrides(
+        self,
+    ) -> Mapping[type[Any], Any] | None:
         return self._dependency_overrides
 
-    def set_auth(
+    def _set_dependency_overrides(
         self,
-        auth: AuthT | None,
+        dependency_overrides: Mapping[type[Any], Any] | None,
     ) -> None:
-        self._auth = auth
+        self._dependency_overrides = dependency_overrides
 
-    def clear_auth(self) -> None:
-        self._auth = None
-
-    def set_trace(
+    def _set_lifecycle_context(
         self,
-        trace: TraceT | None,
+        lifecycle_context: object | None,
     ) -> None:
-        self._trace = trace
-
-    def clear_trace(self) -> None:
-        self._trace = None
-
-    def set_parent_span(
-        self,
-        parent_span: TraceSpan | None,
-    ) -> None:
-        self._parent_span = parent_span
-
-    def clear_parent_span(self) -> None:
-        self._parent_span = None
-
-    def set_dependency_overrides(
-        self,
-        overrides: Mapping[type[Any], Any] | None,
-    ) -> None:
-        self._dependency_overrides = overrides
+        self._lifecycle_context = lifecycle_context
 
     async def invoke(
         self,
         command: UseCaseCommand,
+        *,
+        span: Span | None = None,
     ) -> UseCaseHandlerResult:
         resolved = self._use_case_resolver.resolve(
             type(command),
             overrides=self._dependency_overrides,
         )
+        uow = self._get_use_case_uow(resolved)
 
-        root_uow_type = self._use_case_uow_routing.get_uow_type_by_handler_type(
-            resolved.handler_type,
-        )
-        uow = self._coordinator.get_use_case_uow(root_uow_type)
-
-        if self._tracer is None:
-            return await self._invoke_without_span(
+        if span is None:
+            return await self._invoke(
                 command=command,
                 resolved=resolved,
                 uow=uow,
+                span=None,
             )
 
-        async with self._tracer.start_span(
-            trace=self._trace,
+        async with span.child(
             name=self._build_span_name(
                 operation="runtime.invoke",
                 message=command,
@@ -171,29 +121,25 @@ class ModularMonolithExecutionRuntime[AuthT, TraceT]:
                 key=resolved.registration.key,
                 message_kind="use_case_command",
             ),
-            parent_span=self._parent_span,
-        ) as span:
-            span.add_event("runtime.invoke.started")
+        ) as child:
+            child.add_event("runtime.invoke.started")
 
-            previous_parent_span = self._parent_span
-            self._parent_span = span
+            result = await self._invoke(
+                command=command,
+                resolved=resolved,
+                uow=uow,
+                span=child,
+            )
 
-            try:
-                result = await self._invoke_without_span(
-                    command=command,
-                    resolved=resolved,
-                    uow=uow,
-                )
-            finally:
-                self._parent_span = previous_parent_span
-
-            span.add_event("runtime.invoke.finished")
+            child.add_event("runtime.invoke.finished")
 
         return result
 
     async def invoke_query(
         self,
         query: Query,
+        *,
+        span: Span | None = None,
     ) -> QueryHandlerResult:
         query_resolver = self._require_query_resolver()
         query_uow_routing = self._require_query_uow_routing()
@@ -208,15 +154,15 @@ class ModularMonolithExecutionRuntime[AuthT, TraceT]:
         )
         uow = self._coordinator.get_query_uow(root_uow_type)
 
-        if self._tracer is None:
-            return await self._invoke_query_without_span(
+        if span is None:
+            return await self._invoke_query(
                 query=query,
                 resolved=resolved,
                 uow=uow,
+                span=None,
             )
 
-        async with self._tracer.start_span(
-            trace=self._trace,
+        async with span.child(
             name=self._build_span_name(
                 operation="runtime.invoke_query",
                 message=query,
@@ -229,84 +175,79 @@ class ModularMonolithExecutionRuntime[AuthT, TraceT]:
                 key=resolved.registration.key,
                 message_kind="query",
             ),
-            parent_span=self._parent_span,
-        ) as span:
-            span.add_event("runtime.invoke_query.started")
+        ) as child:
+            child.add_event("runtime.invoke_query.started")
 
-            previous_parent_span = self._parent_span
-            self._parent_span = span
+            result = await self._invoke_query(
+                query=query,
+                resolved=resolved,
+                uow=uow,
+                span=child,
+            )
 
-            try:
-                result = await self._invoke_query_without_span(
-                    query=query,
-                    resolved=resolved,
-                    uow=uow,
-                )
-            finally:
-                self._parent_span = previous_parent_span
-
-            span.add_event("runtime.invoke_query.finished")
+            child.add_event("runtime.invoke_query.finished")
 
         return result
 
-    async def _invoke_without_span(
+    async def _invoke(
         self,
         *,
         command: UseCaseCommand,
-        resolved: Any,
-        uow: Any,
+        resolved: ResolvedHandler[
+            UseCaseHandler,
+            UseCaseHandlerRegistration,
+        ],
+        uow: BaseUnitOfWork,
+        span: Span | None,
     ) -> UseCaseHandlerResult:
-        self._authorize(
-            allowed_access_tags=resolved.registration.config.allowed_access_tags,
-        )
-
         context = UseCaseHandlerContext(
             uow=uow,
             queue=self._event_queue,
-            auth=self._auth,
-            tracer=self._trace,
+            lifecycle_context=self._lifecycle_context,
+            span=span,
         )
 
-        return await resolved.handler(
+        return await resolved.handler.handle(
             command,
             context,
         )
 
-    async def _invoke_query_without_span(
+    async def _invoke_query(
         self,
         *,
         query: Query,
-        resolved: Any,
-        uow: Any,
+        resolved: ResolvedHandler[
+            QueryHandler,
+            QueryHandlerRegistration,
+        ],
+        uow: BaseUnitOfWork,
+        span: Span | None,
     ) -> QueryHandlerResult:
-        self._authorize(
-            allowed_access_tags=resolved.registration.config.allowed_access_tags,
-        )
-
         context = QueryHandlerContext(
             uow=uow,
-            auth=self._auth,
-            tracer=self._trace,
+            lifecycle_context=self._lifecycle_context,
+            span=span,
         )
 
-        return await resolved.handler(
+        return await resolved.handler.handle(
             query,
             context,
         )
 
-    def _authorize(
+    def _get_use_case_uow(
         self,
-        *,
-        allowed_access_tags: frozenset[str] | None,
-    ) -> None:
-        if self._authorizer is None:
-            return
-
-        self._authorizer.authorize(
-            allowed_access_tags=allowed_access_tags,
-            auth=self._auth,
-            location_kind=ModularAuthorizationLocationKind.SYSTEM_INVOKE,
+        resolved: ResolvedHandler[
+            UseCaseHandler,
+            UseCaseHandlerRegistration,
+        ],
+    ) -> BaseUnitOfWork:
+        root_uow_type = (
+            self._use_case_uow_routing.get_uow_type_by_handler_type(
+                resolved.handler_type,
+            )
         )
+
+        return self._coordinator.get_use_case_uow(root_uow_type)
 
     def _require_query_resolver(self) -> QueryHandlerResolver:
         if self._query_resolver is None:
@@ -361,5 +302,5 @@ class ModularMonolithExecutionRuntime[AuthT, TraceT]:
             ),
             "handler.source_name": source_name,
             "handler.key": key,
-            "invocation.kind": "system_invoke",
+            "invocation.kind": "bounded_context",
         }

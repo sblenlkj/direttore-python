@@ -1,266 +1,325 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
 
 from direttore.core.contracts.handlers import (
+    QueryHandler,
     QueryHandlerContext,
     QueryHandlerResult,
 )
 from direttore.core.contracts.messages import Query
-from direttore.core.engines.config import QueryEngineConfig
-from direttore.core.engines.simple_service.base_simple_service_engine import (
-    BaseSimpleServiceEngine,
+from direttore.core.engines.base_engine import BaseQueryEngine
+from direttore.core.engines.simple_service.simple_service_config import (
+    SimpleServiceQueryEngineConfig,
 )
-from direttore.core.modules.auth import (
-    Authenticator,
-    Authorizer,
-    ContextAuthenticator,
+from direttore.core.engines.simple_service.simple_service_payload_loader import (
+    SimpleServiceKeyPayloadLoader,
 )
-from direttore.core.tracing import Tracer
-from direttore.core.primitives.resource_holder import (
-    QueryResourceHolder,
-)
+from direttore.core.primitives.resource_holder import QueryResourceHolder
 from direttore.core.primitives.uow import BaseUnitOfWork
+from direttore.core.registries.registrations import (
+    QueryHandlerRegistration,
+)
 from direttore.core.resolvers.query_handler_resolver import (
     QueryHandlerResolver,
 )
+from direttore.core.resolvers.resolved_handlers import ResolvedHandler
+from direttore.core.tracing import Span, SpanFactory
 
 
-class SimpleServiceQueryEngine[AuthInputT, AuthT, TraceT](
-    BaseSimpleServiceEngine[AuthInputT, AuthT],
-):
+type ResolvedQueryHandler = ResolvedHandler[
+    QueryHandler,
+    QueryHandlerRegistration,
+]
+
+
+class SimpleServiceQueryEngine(BaseQueryEngine):
     def __init__(
         self,
         *,
         resolver: QueryHandlerResolver,
-        authorizer: Authorizer[AuthT] | None = None,
-        config: QueryEngineConfig | None = None,
+        span_factory: SpanFactory[object] | None = None,
+        config: SimpleServiceQueryEngineConfig | None = None,
     ) -> None:
-        super().__init__(
-            authorizer=authorizer,
-        )
         self.resolver = resolver
-        self.config = config or QueryEngineConfig()
+        self.span_factory = span_factory
+        self.config = config or SimpleServiceQueryEngineConfig()
 
     async def handle(
         self,
         *,
         query: Query,
+        input: object,
         resource_holder: QueryResourceHolder,
         uow: BaseUnitOfWork,
-        authenticator: (
-            Authenticator[AuthInputT, AuthT]
-            | ContextAuthenticator[AuthInputT, AuthT, Any]
-            | None
-        ) = None,
-        auth_input: AuthInputT | None = None,
-        trace: TraceT | None = None,
-        tracer: Tracer[TraceT] | None = None,
+        trace: object | None = None,
     ) -> QueryHandlerResult:
-        resolved = self.resolver.resolve(type(query))
-        handler_config = resolved.registration.config
-
-        if isinstance(authenticator, ContextAuthenticator):
-            return await self._handle_with_context_authentication(
-                query=query,
-                resource_holder=resource_holder,
-                uow=uow,
-                authenticator=authenticator,
-                auth_input=auth_input,
-                allowed_access_tags=handler_config.allowed_access_tags,
-                trace=trace,
-                tracer=tracer,
-            )
-
-        auth = await self._authenticate_without_context(
-            authenticator=authenticator,
-            auth_input=auth_input,
+        resolved = self.resolver.resolve(
+            type(query),
         )
 
-        self._authorize(
-            allowed_access_tags=handler_config.allowed_access_tags,
-            auth=auth,
-        )
-
-        return await self._handle_with_resolved_auth(
+        return await self._handle_resolved(
             query=query,
+            input=input,
+            resolved=resolved,
             resource_holder=resource_holder,
             uow=uow,
-            auth=auth,
             trace=trace,
-            tracer=tracer,
         )
 
-    async def _handle_with_context_authentication(
+    async def handle_by_key(
         self,
         *,
-        query: Query,
+        key: str,
+        payload: Mapping[str, object],
+        input: object,
         resource_holder: QueryResourceHolder,
         uow: BaseUnitOfWork,
-        authenticator: ContextAuthenticator[AuthInputT, AuthT, Any],
-        auth_input: AuthInputT | None,
-        allowed_access_tags: frozenset[str] | None,
-        trace: TraceT | None,
-        tracer: Tracer[TraceT] | None,
+        trace: object | None = None,
     ) -> QueryHandlerResult:
-        if tracer is None:
-            return await self._execute_with_context_authentication(
-                query=query,
-                resource_holder=resource_holder,
-                uow=uow,
-                authenticator=authenticator,
-                auth_input=auth_input,
-                allowed_access_tags=allowed_access_tags,
-                trace=trace,
-            )
+        query, resolved = self._resolve_query_by_key(
+            key=key,
+            payload=payload,
+        )
 
-        resolved = self.resolver.resolve(type(query))
-
-        async with tracer.start_span(
-            trace=trace,
-            name=self._build_span_name(
-                operation="query.handle",
-                message=query,
-            ),
-            attributes=self._build_span_attributes(
-                message=query,
-                handler_type=resolved.handler_type,
-                source_name=resolved.registration.source_name,
-                key=resolved.registration.key,
-            ),
-        ) as span:
-            span.add_event("query.execution.started")
-
-            result = await self._execute_with_context_authentication(
-                query=query,
-                resource_holder=resource_holder,
-                uow=uow,
-                authenticator=authenticator,
-                auth_input=auth_input,
-                allowed_access_tags=allowed_access_tags,
-                trace=trace,
-            )
-
-            span.add_event("query.execution.finished")
-
-        return result
-
-    async def _handle_with_resolved_auth(
-        self,
-        *,
-        query: Query,
-        resource_holder: QueryResourceHolder,
-        uow: BaseUnitOfWork,
-        auth: AuthT | None,
-        trace: TraceT | None,
-        tracer: Tracer[TraceT] | None,
-    ) -> QueryHandlerResult:
-        if tracer is None:
-            return await self._execute_with_resolved_auth(
-                query=query,
-                resource_holder=resource_holder,
-                uow=uow,
-                auth=auth,
-                trace=trace,
-            )
-
-        resolved = self.resolver.resolve(type(query))
-
-        async with tracer.start_span(
-            trace=trace,
-            name=self._build_span_name(
-                operation="query.handle",
-                message=query,
-            ),
-            attributes=self._build_span_attributes(
-                message=query,
-                handler_type=resolved.handler_type,
-                source_name=resolved.registration.source_name,
-                key=resolved.registration.key,
-            ),
-        ) as span:
-            span.add_event("query.execution.started")
-
-            result = await self._execute_with_resolved_auth(
-                query=query,
-                resource_holder=resource_holder,
-                uow=uow,
-                auth=auth,
-                trace=trace,
-            )
-
-            span.add_event("query.execution.finished")
-
-        return result
-
-    async def _execute_with_context_authentication(
-        self,
-        *,
-        query: Query,
-        resource_holder: QueryResourceHolder,
-        uow: BaseUnitOfWork,
-        authenticator: ContextAuthenticator[AuthInputT, AuthT, Any],
-        auth_input: AuthInputT | None,
-        allowed_access_tags: frozenset[str] | None,
-        trace: TraceT | None,
-    ) -> QueryHandlerResult:
-        async with resource_holder:
-            auth = await self._authenticate_with_context(
-                authenticator=authenticator,
-                auth_input=auth_input,
-                uow=uow,
-            )
-
-            self._authorize(
-                allowed_access_tags=allowed_access_tags,
-                auth=auth,
-            )
-
-            result = await self._call_handler(
-                query=query,
-                uow=uow,
-                auth=auth,
-                trace=trace,
-            )
-
-        return result
-
-    async def _execute_with_resolved_auth(
-        self,
-        *,
-        query: Query,
-        resource_holder: QueryResourceHolder,
-        uow: BaseUnitOfWork,
-        auth: AuthT | None,
-        trace: TraceT | None,
-    ) -> QueryHandlerResult:
-        async with resource_holder:
-            result = await self._call_handler(
-                query=query,
-                uow=uow,
-                auth=auth,
-                trace=trace,
-            )
-
-        return result
-
-    async def _call_handler(
-        self,
-        *,
-        query: Query,
-        uow: BaseUnitOfWork,
-        auth: AuthT | None,
-        trace: TraceT | None,
-    ) -> QueryHandlerResult:
-        resolved = self.resolver.resolve(type(query))
-
-        context = QueryHandlerContext(
+        return await self._handle_resolved(
+            query=query,
+            input=input,
+            resolved=resolved,
+            resource_holder=resource_holder,
             uow=uow,
-            auth=auth,
-            tracer=trace,
+            trace=trace,
         )
 
-        return await resolved.handler(
-            query,
-            context,
+    async def handle_operation(
+        self,
+        *,
+        operation_id: int | str,
+        input: object,
+        resource_holder: QueryResourceHolder,
+        uow: BaseUnitOfWork,
+        trace: object | None = None,
+    ) -> QueryHandlerResult:
+        if self.span_factory is None:
+            return await self._execute_operation(
+                operation_id=operation_id,
+                input=input,
+                resource_holder=resource_holder,
+                uow=uow,
+                span=None,
+            )
+
+        async with self.span_factory.create_span(
+            trace=trace,
+            name=(
+                "simple.query.handle_operation "
+                f"{operation_id}"
+            ),
+            attributes={
+                "operation.id": operation_id,
+                "operation.kind": "stored_query",
+            },
+        ) as span:
+            span.add_event(
+                "simple.query.operation.started",
+            )
+
+            result = await self._execute_operation(
+                operation_id=operation_id,
+                input=input,
+                resource_holder=resource_holder,
+                uow=uow,
+                span=span,
+            )
+
+            span.add_event(
+                "simple.query.operation.finished",
+            )
+
+        return result
+
+    async def _handle_resolved(
+        self,
+        *,
+        query: Query,
+        input: object,
+        resolved: ResolvedQueryHandler,
+        resource_holder: QueryResourceHolder,
+        uow: BaseUnitOfWork,
+        trace: object | None,
+    ) -> QueryHandlerResult:
+        if self.span_factory is None:
+            return await self._execute(
+                query=query,
+                input=input,
+                resolved=resolved,
+                resource_holder=resource_holder,
+                uow=uow,
+                span=None,
+            )
+
+        async with self.span_factory.create_span(
+            trace=trace,
+            name=self._build_span_name(
+                operation="simple.query.handle",
+                message=query,
+            ),
+            attributes=self._build_span_attributes(
+                message=query,
+                handler_type=resolved.handler_type,
+                source_name=resolved.registration.source_name,
+                key=resolved.registration.key,
+            ),
+        ) as span:
+            span.add_event(
+                "simple.query.execution.started",
+            )
+
+            result = await self._execute(
+                query=query,
+                input=input,
+                resolved=resolved,
+                resource_holder=resource_holder,
+                uow=uow,
+                span=span,
+            )
+
+            span.add_event(
+                "simple.query.execution.finished",
+            )
+
+        return result
+
+    async def _execute(
+        self,
+        *,
+        query: Query,
+        input: object,
+        resolved: ResolvedQueryHandler,
+        resource_holder: QueryResourceHolder,
+        uow: BaseUnitOfWork,
+        span: Span | None,
+    ) -> QueryHandlerResult:
+        async with resource_holder:
+            lifecycle_context = (
+                await resolved.registration.lifecycle.create_context(
+                    input,
+                    resolved.registration.config,
+                    uow,
+                )
+            )
+
+            context = QueryHandlerContext(
+                uow=uow,
+                lifecycle_context=lifecycle_context,
+                span=span,
+            )
+
+            result = await resolved.handler.handle(
+                query,
+                context,
+            )
+        return result
+
+    async def _execute_operation(
+        self,
+        *,
+        operation_id: int | str,
+        input: object,
+        resource_holder: QueryResourceHolder,
+        uow: BaseUnitOfWork,
+        span: Span | None,
+    ) -> QueryHandlerResult:
+        payload_loader = self._require_payload_key_loader()
+
+        async with resource_holder:
+            key_payload_pair = (
+                await payload_loader.get_key_payload_pair(
+                    operation_id,
+                    uow,
+                )
+            )
+
+            query, resolved = self._resolve_query_by_key(
+                key=key_payload_pair.key,
+                payload=key_payload_pair.payload,
+            )
+
+            if span is not None:
+                span.set_attribute(
+                    "operation.key",
+                    key_payload_pair.key,
+                )
+
+                for key, value in self._build_span_attributes(
+                    message=query,
+                    handler_type=resolved.handler_type,
+                    source_name=(
+                        resolved.registration.source_name
+                    ),
+                    key=resolved.registration.key,
+                ).items():
+                    span.set_attribute(
+                        key,
+                        value,
+                    )
+
+                span.add_event(
+                    "simple.query.operation.loaded",
+                )
+
+            lifecycle_context = (
+                await resolved.registration.lifecycle.create_context(
+                    input,
+                    resolved.registration.config,
+                    uow,
+                )
+            )
+
+            context = QueryHandlerContext(
+                uow=uow,
+                lifecycle_context=lifecycle_context,
+                span=span,
+            )
+
+            result = await resolved.handler.handle(
+                query,
+                context,
+            )
+        return result
+
+    def _resolve_query_by_key(
+        self,
+        *,
+        key: str,
+        payload: Mapping[str, object],
+    ) -> tuple[
+        Query,
+        ResolvedQueryHandler,
+    ]:
+        resolved = self.resolver.resolve_by_key(
+            key,
         )
+
+        query = self._build_query_from_payload(
+            key=key,
+            payload=payload,
+            query_type=resolved.registration.query_type,
+        )
+
+        return (
+            query,
+            resolved,
+        )
+
+    def _require_payload_key_loader(
+        self,
+    ) -> SimpleServiceKeyPayloadLoader:
+        if self.config.payload_key_loader is None:
+            raise RuntimeError(
+                "Simple service query operation execution is not "
+                "configured. handle_operation(...) requires "
+                "payload_key_loader."
+            )
+
+        return self.config.payload_key_loader

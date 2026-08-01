@@ -41,7 +41,7 @@ class ModularMonolithExecutionDependencyContext:
     runtime provides execution-scoped in-process implementations.
     """
 
-    runtime: ModularMonolithExecutionRuntime[Any, Any]
+    runtime: ModularMonolithExecutionRuntime
 
 
 type ModularMonolithExecutionDependencyFactory[DependencyT] = Callable[

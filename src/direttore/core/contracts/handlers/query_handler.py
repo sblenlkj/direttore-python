@@ -7,6 +7,7 @@ from typing import Any
 from direttore.core.contracts.messages import Query
 from direttore.core.primitives.uow import BaseUnitOfWork
 
+from direttore.core.tracing import Span
 
 @dataclass(frozen=True, slots=True)
 class QueryHandlerResult:
@@ -14,10 +15,14 @@ class QueryHandlerResult:
 
 
 @dataclass(slots=True)
-class QueryHandlerContext[UnitOfWorkT: BaseUnitOfWork, AuthT, TraceT]:
+class QueryHandlerContext[
+    UnitOfWorkT: BaseUnitOfWork,
+    LifecycleContextT,
+    SpanT: Span,
+]:
     uow: UnitOfWorkT
-    auth: AuthT | None = None
-    tracer: TraceT | None = None
+    lifecycle_context: LifecycleContextT | None
+    span: SpanT | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,9 +32,9 @@ class QueryHandlerConfig:
 
 class QueryHandler(ABC):
     @abstractmethod
-    async def __call__(
+    async def handle(
         self,
         query: Query,
-        context: QueryHandlerContext[BaseUnitOfWork, Any, Any],
+        context: QueryHandlerContext[BaseUnitOfWork, object, Span],
     ) -> QueryHandlerResult:
         raise NotImplementedError

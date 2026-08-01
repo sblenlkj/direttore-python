@@ -32,15 +32,11 @@ from .core import (
 
 from .application import (
     ModularMonolithDirettoreContext,
-    ModularMonolithAuthConfig,
-    ModularMonolithTracingConfig,
     ModularMonolithSlotConfig,
     ModularMonolithDirettoreConfig,
     ModularMonolithDirettoreApplication,
 
     SimpleServiceDirettoreConfig,
-    SimpleServiceAuthConfig,
-    SimpleServiceTracingConfig,
     SimpleServiceSlotConfig,
     SimpleServiceDirettoreApplication
 )

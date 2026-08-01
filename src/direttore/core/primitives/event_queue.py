@@ -5,17 +5,19 @@ from collections.abc import Iterable
 
 from direttore.core.contracts.messages import Event
 
+
 class EventQueue:
     """
     Queue for post-command event orchestration.
     """
-    def __init__(self) -> None:
-        self._queue = deque()
 
-    def push(self, message: object) -> None:
+    def __init__(self) -> None:
+        self._queue: deque[Event] = deque()
+
+    def push(self, message: Event) -> None:
         self._queue.append(message)
 
-    def push_many(self, messages: Iterable[object]) -> None:
+    def push_many(self, messages: Iterable[Event]) -> None:
         self._queue.extend(messages)
 
     def pop(self) -> Event:

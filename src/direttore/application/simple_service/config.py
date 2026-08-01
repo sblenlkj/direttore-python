@@ -2,16 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
 
-from direttore.core.engines.config import UseCaseEngineConfig
-from direttore.core.modules.auth import (
-    SimpleServiceAuthConfig,
-    SimpleServiceSessionAuthConfig,
-)
-from direttore.core.tracing import (
-    TraceResolver,
-    Tracer,
+from direttore.core.engines.simple_service.simple_service_config import (
+    SimpleServiceUseCaseEngineConfig,
+    SimpleServiceQueryEngineConfig,
 )
 from direttore.core.primitives.resource_holder import (
     AbstractUseCaseResourceHolder,
@@ -27,6 +21,7 @@ from direttore.core.registries.query_handler_registry import (
 from direttore.core.registries.use_case_handler_registry import (
     UseCaseHandlerRegistry,
 )
+from direttore.core.tracing import SpanFactory
 
 
 type UseCaseResourceHolderFactory = Callable[
@@ -62,13 +57,7 @@ class InvalidSimpleServiceHandlerConfigError(SimpleServiceConfigError):
     pass
 
 
-@dataclass(frozen=True)
-class SimpleServiceTracingConfig[TraceInputT, TraceT]:
-    trace_resolver: TraceResolver[TraceInputT, TraceT] | None = None
-    tracer: Tracer[TraceT] | None = None
-
-
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SimpleServiceSlotConfig:
     use_case_resource_holder_factory: UseCaseResourceHolderFactory
     use_case_uow_factory: UseCaseUnitOfWorkFactory
@@ -89,10 +78,6 @@ class SimpleServiceSlotConfig:
             )
 
     @property
-    def has_use_case(self) -> bool:
-        return True
-
-    @property
     def has_query(self) -> bool:
         return (
             self.query_resource_holder_factory is not None
@@ -100,21 +85,23 @@ class SimpleServiceSlotConfig:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SimpleServiceHandlerConfig:
     use_case_registry: UseCaseHandlerRegistry
     query_registry: QueryHandlerRegistry | None = None
     event_registry: EventHandlerRegistry | None = None
 
 
-@dataclass(frozen=True)
-class SimpleServiceDirettoreConfig[AuthInputT, AuthT, TraceInputT, TraceT]:
+@dataclass(frozen=True, slots=True)
+class SimpleServiceDirettoreConfig:
     slot: SimpleServiceSlotConfig
     handlers: SimpleServiceHandlerConfig
-    auth: SimpleServiceAuthConfig[AuthInputT, AuthT] | SimpleServiceSessionAuthConfig[AuthInputT, AuthT] | None = None
-    tracing: SimpleServiceTracingConfig[TraceInputT, TraceT] | None = None
-    use_case_engine: UseCaseEngineConfig = field(
-        default_factory=UseCaseEngineConfig,
+    span_factory: SpanFactory[object] | None = None
+    use_case_engine: SimpleServiceUseCaseEngineConfig = field(
+        default_factory=SimpleServiceUseCaseEngineConfig,
+    )
+    query_engine: SimpleServiceQueryEngineConfig = field(
+        default_factory=SimpleServiceQueryEngineConfig,
     )
 
     def __post_init__(self) -> None:
@@ -128,10 +115,4 @@ class SimpleServiceDirettoreConfig[AuthInputT, AuthT, TraceInputT, TraceT]:
             raise InvalidSimpleServiceHandlerConfigError(
                 "query_registry was provided, but query slot configuration is "
                 "not configured."
-            )
-
-        if self.handlers.event_registry is not None and not self.slot.has_use_case:
-            raise InvalidSimpleServiceHandlerConfigError(
-                "event_registry requires use case slot configuration. "
-                "Events are dispatched from use case execution."
             )

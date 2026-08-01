@@ -14,14 +14,14 @@ from direttore.core.modular_monolith_support.coordinator import (
 from direttore.core.modular_monolith_support.uow_routing_registries.event_uow_routing_registry import (
     EventUowRoutingRegistry,
 )
-from direttore.core.tracing import TraceSpan, Tracer
 from direttore.core.primitives.uow import BaseUnitOfWork
 from direttore.core.resolvers.event_handler_resolver import (
     EventHandlerResolver,
 )
+from direttore.core.tracing import Span
 
 
-class ModularMonolithEventDispatcher[TraceT](BaseEventDispatcher):
+class ModularMonolithEventDispatcher(BaseEventDispatcher):
     """Event dispatcher for modular monolith execution.
 
     The dispatcher is stateless.
@@ -53,9 +53,7 @@ class ModularMonolithEventDispatcher[TraceT](BaseEventDispatcher):
         event: Event,
         coordinator: ModularUnitOfWorkCoordinator,
         overrides: Mapping[type[Any], Any] | None = None,
-        trace: TraceT | None = None,
-        tracer: Tracer[TraceT] | None = None,
-        parent_span: TraceSpan | None = None,
+        span: Span | None = None,
     ) -> None:
         resolved_handlers = self.resolver.resolve(
             type(event),
@@ -68,19 +66,17 @@ class ModularMonolithEventDispatcher[TraceT](BaseEventDispatcher):
                 coordinator=coordinator,
             )
 
-            context = EventHandlerContext(
-                uow=uow,
-            )
-
-            if tracer is None:
-                await resolved.handler(
+            if span is None:
+                await resolved.handler.handle(
                     event,
-                    context,
+                    EventHandlerContext(
+                        uow=uow,
+                        span=None,
+                    ),
                 )
                 continue
 
-            async with tracer.start_span(
-                trace=trace,
+            async with span.child(
                 name=self._build_span_name(
                     event=event,
                     handler_type=resolved.handler_type,
@@ -90,11 +86,13 @@ class ModularMonolithEventDispatcher[TraceT](BaseEventDispatcher):
                     handler_type=resolved.handler_type,
                     source_name=resolved.registration.source_name,
                 ),
-                parent_span=parent_span,
-            ):
-                await resolved.handler(
+            ) as child:
+                await resolved.handler.handle(
                     event,
-                    context,
+                    EventHandlerContext(
+                        uow=uow,
+                        span=child,
+                    ),
                 )
 
     def _get_handler_uow(

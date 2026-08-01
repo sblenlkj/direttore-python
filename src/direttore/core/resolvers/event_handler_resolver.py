@@ -71,7 +71,7 @@ class EventHandlerResolver(
 
         for registration in registrations:
             resolved_handlers.append(
-                super().resolve(
+                super().resolve_registration(
                     registration=registration,
                     overrides=overrides,
                 )

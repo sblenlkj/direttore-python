@@ -5,6 +5,7 @@ from typing import Any
 
 from direttore.application.execution_slot_pool import (
     ExecutionSlotPool,
+    ExecutionSlotPoolStats,
 )
 from direttore.application.simple_service.config import (
     SimpleServiceDirettoreConfig,
@@ -16,10 +17,7 @@ from direttore.core.contracts.handlers import (
     QueryHandlerResult,
     UseCaseHandlerResult,
 )
-from direttore.core.contracts.messages import (
-    Query,
-    UseCaseCommand,
-)
+from direttore.core.contracts.messages import Query, UseCaseCommand
 from direttore.core.engines.simple_service.simple_service_query_engine import (
     SimpleServiceQueryEngine,
 )
@@ -29,11 +27,6 @@ from direttore.core.engines.simple_service.simple_service_use_case_engine import
 from direttore.core.event_dispatchers.simple_service_event_dispatcher import (
     SimpleServiceEventDispatcher,
 )
-from direttore.core.modules.auth import (
-    Authenticator,
-    ContextAuthenticator,
-)
-from direttore.core.tracing import Tracer
 from direttore.core.primitives.container import Container
 from direttore.core.resolvers.event_handler_resolver import (
     EventHandlerResolver,
@@ -46,21 +39,11 @@ from direttore.core.resolvers.use_case_handler_resolver import (
 )
 
 
-class SimpleServiceDirettoreApplication[
-    AuthInputT,
-    AuthT,
-    TraceInputT,
-    TraceT,
-]:
+class SimpleServiceDirettoreApplication:
     def __init__(
         self,
         *,
-        config: SimpleServiceDirettoreConfig[
-            AuthInputT,
-            AuthT,
-            TraceInputT,
-            TraceT,
-        ],
+        config: SimpleServiceDirettoreConfig,
         container: Container,
         initial_slot_count: int = 5,
         max_slot_count: int = 20,
@@ -72,9 +55,7 @@ class SimpleServiceDirettoreApplication[
         self.use_case_engine = self._build_use_case_engine()
         self.query_engine = self._build_query_engine()
 
-        self.slot_pool = ExecutionSlotPool[
-            SimpleServiceExecutionSlot[AuthInputT, AuthT, TraceT]
-        ](
+        self.slot_pool = ExecutionSlotPool[SimpleServiceExecutionSlot](
             slot_factory=self._create_slot,
             initial_slot_count=initial_slot_count,
             max_slot_count=max_slot_count,
@@ -84,103 +65,104 @@ class SimpleServiceDirettoreApplication[
         self,
         command: UseCaseCommand,
         *,
-        auth_input: AuthInputT | None = None,
-        trace_input: TraceInputT | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> UseCaseHandlerResult:
-        slot = await self.slot_pool.acquire()
-
-        try:
-            trace = self._resolve_trace(trace_input)
-
+        async with self.slot_pool.acquire() as slot:
             return await slot.handle(
                 command=command,
-                authenticator=self._get_authenticator(),
-                auth_input=auth_input,
+                input=input,
                 trace=trace,
-                tracer=self._get_tracer(),
             )
-        finally:
-            await self.slot_pool.release(slot)
 
     async def handle_by_key(
         self,
         key: str,
         payload: Mapping[str, Any],
         *,
-        auth_input: AuthInputT | None = None,
-        trace_input: TraceInputT | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> UseCaseHandlerResult:
-        slot = await self.slot_pool.acquire()
-
-        try:
-            trace = self._resolve_trace(trace_input)
-
+        async with self.slot_pool.acquire() as slot:
             return await slot.handle_by_key(
                 key=key,
                 payload=payload,
-                authenticator=self._get_authenticator(),
-                auth_input=auth_input,
+                input=input,
                 trace=trace,
-                tracer=self._get_tracer(),
             )
-        finally:
-            await self.slot_pool.release(slot)
+
+    async def handle_operation(
+        self,
+        operation_id: int | str,
+        *,
+        input: object,
+        trace: object | None = None,
+    ) -> UseCaseHandlerResult:
+        async with self.slot_pool.acquire() as slot:
+            return await slot.handle_operation(
+                operation_id=operation_id,
+                input=input,
+                trace=trace,
+            )
 
     async def handle_query(
         self,
         query: Query,
         *,
-        auth_input: AuthInputT | None = None,
-        trace_input: TraceInputT | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> QueryHandlerResult:
         if self.query_engine is None:
             raise RuntimeError(
                 "Simple service query execution is not configured."
             )
 
-        slot = await self.slot_pool.acquire()
-
-        try:
-            trace = self._resolve_trace(trace_input)
-
+        async with self.slot_pool.acquire() as slot:
             return await slot.handle_query(
                 query=query,
-                authenticator=self._get_authenticator(),
-                auth_input=auth_input,
+                input=input,
                 trace=trace,
-                tracer=self._get_tracer(),
             )
-        finally:
-            await self.slot_pool.release(slot)
 
     async def handle_query_by_key(
         self,
         key: str,
         payload: Mapping[str, Any],
         *,
-        auth_input: AuthInputT | None = None,
-        trace_input: TraceInputT | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> QueryHandlerResult:
         if self.query_engine is None:
             raise RuntimeError(
                 "Simple service query execution is not configured."
             )
 
-        slot = await self.slot_pool.acquire()
-
-        try:
-            trace = self._resolve_trace(trace_input)
-
+        async with self.slot_pool.acquire() as slot:
             return await slot.handle_query_by_key(
                 key=key,
                 payload=payload,
-                authenticator=self._get_authenticator(),
-                auth_input=auth_input,
+                input=input,
                 trace=trace,
-                tracer=self._get_tracer(),
             )
-        finally:
-            await self.slot_pool.release(slot)
+
+    async def handle_query_operation(
+        self,
+        operation_id: int | str,
+        *,
+        input: object,
+        trace: object | None = None,
+    ) -> QueryHandlerResult:
+        if self.query_engine is None:
+            raise RuntimeError(
+                "Simple service query execution is not configured."
+            )
+
+        async with self.slot_pool.acquire() as slot:
+            return await slot.handle_query_operation(
+                operation_id=operation_id,
+                input=input,
+                trace=trace,
+            )
 
     def validate(self) -> None:
         self.use_case_engine.resolver.validate()
@@ -191,12 +173,12 @@ class SimpleServiceDirettoreApplication[
         if self.event_dispatcher is not None:
             self.event_dispatcher.validate_event_handlers()
 
-    def slot_pool_stats(self):
+    def slot_pool_stats(self) -> ExecutionSlotPoolStats:
         return self.slot_pool.stats()
 
     def _build_event_dispatcher(
         self,
-    ) -> SimpleServiceEventDispatcher[TraceT] | None:
+    ) -> SimpleServiceEventDispatcher | None:
         if self.config.handlers.event_registry is None:
             return None
 
@@ -205,32 +187,28 @@ class SimpleServiceDirettoreApplication[
             container=self.container,
         )
 
-        return SimpleServiceEventDispatcher[TraceT](
+        return SimpleServiceEventDispatcher(
             resolver=event_resolver,
         )
 
     def _build_use_case_engine(
         self,
-    ) -> SimpleServiceUseCaseEngine[AuthInputT, AuthT, TraceT]:
+    ) -> SimpleServiceUseCaseEngine:
         use_case_resolver = UseCaseHandlerResolver(
             registry=self.config.handlers.use_case_registry,
             container=self.container,
         )
 
-        return SimpleServiceUseCaseEngine[
-            AuthInputT,
-            AuthT,
-            TraceT,
-        ](
+        return SimpleServiceUseCaseEngine(
             resolver=use_case_resolver,
             event_dispatcher=self.event_dispatcher,
-            authorizer=self._get_authorizer(),
+            span_factory=self.config.span_factory,
             config=self.config.use_case_engine,
         )
 
     def _build_query_engine(
         self,
-    ) -> SimpleServiceQueryEngine[AuthInputT, AuthT, TraceT] | None:
+    ) -> SimpleServiceQueryEngine | None:
         if self.config.handlers.query_registry is None:
             return None
 
@@ -239,65 +217,41 @@ class SimpleServiceDirettoreApplication[
             container=self.container,
         )
 
-        return SimpleServiceQueryEngine[
-            AuthInputT,
-            AuthT,
-            TraceT,
-        ](
+        return SimpleServiceQueryEngine(
             resolver=query_resolver,
-            authorizer=self._get_authorizer(),
+            span_factory=self.config.span_factory,
+            config=self.config.query_engine,
         )
 
     def _create_slot(
         self,
-    ) -> SimpleServiceExecutionSlot[AuthInputT, AuthT, TraceT]:
+    ) -> SimpleServiceExecutionSlot:
+        use_case_resource_holder = (
+            self.config.slot.use_case_resource_holder_factory()
+        )
+        use_case_uow = self.config.slot.use_case_uow_factory(
+            use_case_resource_holder,
+        )
+
+        query_resource_holder = None
+        query_uow = None
+
+        if (
+            self.config.slot.query_resource_holder_factory is not None
+            and self.config.slot.query_uow_factory is not None
+        ):
+            query_resource_holder = (
+                self.config.slot.query_resource_holder_factory()
+            )
+            query_uow = self.config.slot.query_uow_factory(
+                query_resource_holder,
+            )
+
         return SimpleServiceExecutionSlot(
             use_case_engine=self.use_case_engine,
+            use_case_resource_holder=use_case_resource_holder,
+            use_case_uow=use_case_uow,
             query_engine=self.query_engine,
-            use_case_resource_holder_factory=(
-                self.config.slot.use_case_resource_holder_factory
-            ),
-            query_resource_holder_factory=(
-                self.config.slot.query_resource_holder_factory
-            ),
-            use_case_uow_factory=self.config.slot.use_case_uow_factory,
-            query_uow_factory=self.config.slot.query_uow_factory,
+            query_resource_holder=query_resource_holder,
+            query_uow=query_uow,
         )
-
-    def _resolve_trace(
-        self,
-        trace_input: TraceInputT | None,
-    ) -> TraceT | None:
-        if self.config.tracing is None:
-            return None
-
-        if self.config.tracing.trace_resolver is None:
-            return None
-
-        return self.config.tracing.trace_resolver.resolve_trace(
-            trace_input,
-        )
-
-    def _get_authenticator(
-        self,
-    ) -> (
-        Authenticator[AuthInputT, AuthT]
-        | ContextAuthenticator[AuthInputT, AuthT, Any]
-        | None
-    ):
-        if self.config.auth is None:
-            return None
-
-        return self.config.auth.authenticator
-
-    def _get_authorizer(self):
-        if self.config.auth is None:
-            return None
-
-        return self.config.auth.authorizer
-
-    def _get_tracer(self) -> Tracer[TraceT] | None:
-        if self.config.tracing is None:
-            return None
-
-        return self.config.tracing.tracer

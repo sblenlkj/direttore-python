@@ -8,12 +8,15 @@ from direttore.core.contracts.handlers import (
     QueryHandlerConfig,
     UseCaseHandler,
     UseCaseHandlerConfig,
+    UseCaseHandlerExecutionMode,
+    UseCaseEventDrainingMode,
 )
 from direttore.core.contracts.messages import (
     Event,
     Query,
     UseCaseCommand,
 )
+from direttore.core.contracts.lifecycle import UseCaseLifecycle, QueryLifecycle
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -25,13 +28,21 @@ class BaseHandlerRegistration:
 class BaseKeyedHandlerRegistration(BaseHandlerRegistration):
     key: str | None = None
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class BaseSagaKeyedHandlerRegistration(BaseHandlerRegistration):
+    saga_key: str | None = None
 
 @dataclass(frozen=True, slots=True)
-class UseCaseHandlerRegistration(BaseKeyedHandlerRegistration):
+class UseCaseHandlerRegistration(BaseKeyedHandlerRegistration, BaseSagaKeyedHandlerRegistration):
     command_type: type[UseCaseCommand]
     handler_type: type[UseCaseHandler]
-    config: UseCaseHandlerConfig = field(
-        default_factory=UseCaseHandlerConfig,
+    lifecycle: UseCaseLifecycle
+    config: UseCaseHandlerConfig
+    execution_mode: UseCaseHandlerExecutionMode = (
+        UseCaseHandlerExecutionMode.IN_TRANSACTION
+    )
+    event_draining_mode: UseCaseEventDrainingMode = (
+        UseCaseEventDrainingMode.SEQUENTIAL
     )
 
 
@@ -39,13 +50,12 @@ class UseCaseHandlerRegistration(BaseKeyedHandlerRegistration):
 class QueryHandlerRegistration(BaseKeyedHandlerRegistration):
     query_type: type[Query]
     handler_type: type[QueryHandler]
-    config: QueryHandlerConfig = field(
-        default_factory=QueryHandlerConfig,
-    )
+    lifecycle: QueryLifecycle
+    config: QueryHandlerConfig
 
 
 @dataclass(frozen=True, slots=True)
-class EventHandlerRegistration(BaseHandlerRegistration):
+class EventHandlerRegistration(BaseSagaKeyedHandlerRegistration):
     event_type: type[Event]
     handler_type: type[EventHandler]
     is_ready: bool = True

@@ -5,14 +5,14 @@ from direttore.core.contracts.messages import Event
 from direttore.core.event_dispatchers.base_event_dispatcher import (
     BaseEventDispatcher,
 )
-from direttore.core.tracing import TraceSpan, Tracer
 from direttore.core.primitives.uow import BaseUnitOfWork
 from direttore.core.resolvers.event_handler_resolver import (
     EventHandlerResolver,
 )
+from direttore.core.tracing import Span
 
 
-class SimpleServiceEventDispatcher[TraceT](BaseEventDispatcher):
+class SimpleServiceEventDispatcher(BaseEventDispatcher):
     def __init__(
         self,
         *,
@@ -27,23 +27,23 @@ class SimpleServiceEventDispatcher[TraceT](BaseEventDispatcher):
         self,
         *,
         event: Event,
-        context: EventHandlerContext[BaseUnitOfWork],
-        trace: TraceT | None = None,
-        tracer: Tracer[TraceT] | None = None,
-        parent_span: TraceSpan | None = None,
+        uow: BaseUnitOfWork,
+        span: Span | None = None,
     ) -> None:
         resolved_handlers = self.resolver.resolve(type(event))
 
         for resolved in resolved_handlers:
-            if tracer is None:
-                await resolved.handler(
+            if span is None:
+                await resolved.handler.handle(
                     event,
-                    context,
+                    EventHandlerContext(
+                        uow=uow,
+                        span=None,
+                    ),
                 )
                 continue
 
-            async with tracer.start_span(
-                trace=trace,
+            async with span.child(
                 name=self._build_span_name(
                     event=event,
                     handler_type=resolved.handler_type,
@@ -53,9 +53,11 @@ class SimpleServiceEventDispatcher[TraceT](BaseEventDispatcher):
                     handler_type=resolved.handler_type,
                     source_name=resolved.registration.source_name,
                 ),
-                parent_span=parent_span,
-            ):
-                await resolved.handler(
+            ) as child:
+                await resolved.handler.handle(
                     event,
-                    context,
+                    EventHandlerContext(
+                        uow=uow,
+                        span=child,
+                    ),
                 )

@@ -1,36 +1,19 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
-from direttore.application.base_execution_slot import (
-    BaseExecutionSlot,
-)
-from direttore.application.simple_service.config import (
-    QueryResourceHolderFactory,
-    QueryUnitOfWorkFactory,
-    UseCaseResourceHolderFactory,
-    UseCaseUnitOfWorkFactory,
-)
+from direttore.application.base_execution_slot import BaseExecutionSlot
 from direttore.core.contracts.handlers import (
     QueryHandlerResult,
     UseCaseHandlerResult,
 )
-from direttore.core.contracts.messages import (
-    Query,
-    UseCaseCommand,
-)
+from direttore.core.contracts.messages import Query, UseCaseCommand
 from direttore.core.engines.simple_service.simple_service_query_engine import (
     SimpleServiceQueryEngine,
 )
 from direttore.core.engines.simple_service.simple_service_use_case_engine import (
     SimpleServiceUseCaseEngine,
 )
-from direttore.core.modules.auth import (
-    Authenticator,
-    ContextAuthenticator,
-)
-from direttore.core.tracing import Tracer
 from direttore.core.primitives.event_queue import EventQueue
 from direttore.core.primitives.resource_holder import (
     AbstractUseCaseResourceHolder,
@@ -39,171 +22,180 @@ from direttore.core.primitives.resource_holder import (
 from direttore.core.primitives.uow import BaseUnitOfWork
 
 
-class SimpleServiceExecutionSlot[
-    AuthInputT,
-    AuthT,
-    TraceT,
-](BaseExecutionSlot):
+class SimpleServiceExecutionSlot(BaseExecutionSlot):
     def __init__(
         self,
         *,
-        use_case_engine: SimpleServiceUseCaseEngine[
-            AuthInputT,
-            AuthT,
-            TraceT,
-        ],
-        use_case_resource_holder_factory: UseCaseResourceHolderFactory,
-        use_case_uow_factory: UseCaseUnitOfWorkFactory,
-        query_engine: SimpleServiceQueryEngine[AuthInputT, AuthT, TraceT]
-        | None = None,
-        query_resource_holder_factory: QueryResourceHolderFactory | None = None,
-        query_uow_factory: QueryUnitOfWorkFactory | None = None,
+        use_case_engine: SimpleServiceUseCaseEngine,
+        use_case_resource_holder: AbstractUseCaseResourceHolder,
+        use_case_uow: BaseUnitOfWork,
+        query_engine: SimpleServiceQueryEngine | None = None,
+        query_resource_holder: QueryResourceHolder | None = None,
+        query_uow: BaseUnitOfWork | None = None,
     ) -> None:
+        has_query_resource_holder = query_resource_holder is not None
+        has_query_uow = query_uow is not None
+
+        if has_query_resource_holder != has_query_uow:
+            raise ValueError(
+                "Query slot resources are incomplete. "
+                "Both query_resource_holder and query_uow must be "
+                "provided together."
+            )
+
+        if query_engine is None and has_query_resource_holder:
+            raise ValueError(
+                "Query slot resources were provided without "
+                "query_engine."
+            )
+
+        if query_engine is not None and not has_query_resource_holder:
+            raise ValueError(
+                "query_engine requires query_resource_holder and "
+                "query_uow."
+            )
+
         self.use_case_engine = use_case_engine
         self.query_engine = query_engine
 
-        self.use_case_resource_holder: AbstractUseCaseResourceHolder = (
-            use_case_resource_holder_factory()
-        )
-        self.use_case_uow: BaseUnitOfWork = use_case_uow_factory(
-            self.use_case_resource_holder,
-        )
+        self.use_case_resource_holder = use_case_resource_holder
+        self.use_case_uow = use_case_uow
 
-        self.query_resource_holder: QueryResourceHolder | None = None
-        self.query_uow: BaseUnitOfWork | None = None
+        self.query_resource_holder = query_resource_holder
+        self.query_uow = query_uow
 
-        if (
-            query_resource_holder_factory is not None
-            and query_uow_factory is not None
-        ):
-            self.query_resource_holder = query_resource_holder_factory()
-            self.query_uow = query_uow_factory(
-                self.query_resource_holder,
-            )
-
-        self.event_queue: EventQueue = EventQueue()
+        self.event_queue = EventQueue()
 
     async def handle(
         self,
         *,
         command: UseCaseCommand,
-        authenticator: (
-            Authenticator[AuthInputT, AuthT]
-            | ContextAuthenticator[AuthInputT, AuthT, Any]
-            | None
-        ) = None,
-        auth_input: AuthInputT | None = None,
-        trace: TraceT | None = None,
-        tracer: Tracer[TraceT] | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> UseCaseHandlerResult:
         return await self.use_case_engine.handle(
             command=command,
+            input=input,
             resource_holder=self.use_case_resource_holder,
             uow=self.use_case_uow,
             event_queue=self.event_queue,
-            authenticator=authenticator,
-            auth_input=auth_input,
             trace=trace,
-            tracer=tracer,
         )
 
     async def handle_by_key(
         self,
         key: str,
-        payload: Mapping[str, Any],
+        payload: Mapping[str, object],
         *,
-        authenticator: (
-            Authenticator[AuthInputT, AuthT]
-            | ContextAuthenticator[AuthInputT, AuthT, Any]
-            | None
-        ) = None,
-        auth_input: AuthInputT | None = None,
-        trace: TraceT | None = None,
-        tracer: Tracer[TraceT] | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> UseCaseHandlerResult:
-        resolved = self.use_case_engine.resolver.resolve_by_key(key)
-
-        command = self._build_command_from_payload(
+        return await self.use_case_engine.handle_by_key(
             key=key,
             payload=payload,
-            command_type=resolved.registration.command_type,
+            input=input,
+            resource_holder=self.use_case_resource_holder,
+            uow=self.use_case_uow,
+            event_queue=self.event_queue,
+            trace=trace,
         )
 
-        return await self.handle(
-            command=command,
-            authenticator=authenticator,
-            auth_input=auth_input,
+    async def handle_operation(
+        self,
+        operation_id: int | str,
+        *,
+        input: object,
+        trace: object | None = None,
+    ) -> UseCaseHandlerResult:
+        return await self.use_case_engine.handle_operation(
+            operation_id=operation_id,
+            input=input,
+            resource_holder=self.use_case_resource_holder,
+            uow=self.use_case_uow,
+            event_queue=self.event_queue,
             trace=trace,
-            tracer=tracer,
         )
 
     async def handle_query(
         self,
         *,
         query: Query,
-        authenticator: (
-            Authenticator[AuthInputT, AuthT]
-            | ContextAuthenticator[AuthInputT, AuthT, Any]
-            | None
-        ) = None,
-        auth_input: AuthInputT | None = None,
-        trace: TraceT | None = None,
-        tracer: Tracer[TraceT] | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> QueryHandlerResult:
-        if self.query_engine is None:
-            raise RuntimeError(
-                "Simple service query execution is not configured."
-            )
+        query_engine, query_resource_holder, query_uow = (
+            self._require_query_execution()
+        )
 
-        if self.query_resource_holder is None or self.query_uow is None:
-            raise RuntimeError(
-                "Simple service query slot resources are not configured."
-            )
-
-        return await self.query_engine.handle(
+        return await query_engine.handle(
             query=query,
-            resource_holder=self.query_resource_holder,
-            uow=self.query_uow,
-            authenticator=authenticator,
-            auth_input=auth_input,
+            input=input,
+            resource_holder=query_resource_holder,
+            uow=query_uow,
             trace=trace,
-            tracer=tracer,
         )
 
     async def handle_query_by_key(
         self,
         key: str,
-        payload: Mapping[str, Any],
+        payload: Mapping[str, object],
         *,
-        authenticator: (
-            Authenticator[AuthInputT, AuthT]
-            | ContextAuthenticator[AuthInputT, AuthT, Any]
-            | None
-        ) = None,
-        auth_input: AuthInputT | None = None,
-        trace: TraceT | None = None,
-        tracer: Tracer[TraceT] | None = None,
+        input: object,
+        trace: object | None = None,
     ) -> QueryHandlerResult:
-        if self.query_engine is None:
-            raise RuntimeError(
-                "Simple service query execution is not configured."
-            )
-
-        resolved = self.query_engine.resolver.resolve_by_key(key)
-
-        query = self._build_query_from_payload(
-            key=key,
-            payload=payload,
-            query_type=resolved.registration.query_type,
+        query_engine, query_resource_holder, query_uow = (
+            self._require_query_execution()
         )
 
-        return await self.handle_query(
-            query=query,
-            authenticator=authenticator,
-            auth_input=auth_input,
+        return await query_engine.handle_by_key(
+            key=key,
+            payload=payload,
+            input=input,
+            resource_holder=query_resource_holder,
+            uow=query_uow,
             trace=trace,
-            tracer=tracer,
+        )
+
+    async def handle_query_operation(
+        self,
+        operation_id: int | str,
+        *,
+        input: object,
+        trace: object | None = None,
+    ) -> QueryHandlerResult:
+        query_engine, query_resource_holder, query_uow = (
+            self._require_query_execution()
+        )
+
+        return await query_engine.handle_operation(
+            operation_id=operation_id,
+            input=input,
+            resource_holder=query_resource_holder,
+            uow=query_uow,
+            trace=trace,
         )
 
     def reset(self) -> None:
         self.event_queue.clear()
+
+    def _require_query_execution(
+        self,
+    ) -> tuple[
+        SimpleServiceQueryEngine,
+        QueryResourceHolder,
+        BaseUnitOfWork,
+    ]:
+        if (
+            self.query_engine is None
+            or self.query_resource_holder is None
+            or self.query_uow is None
+        ):
+            raise RuntimeError(
+                "Simple service query execution is not configured."
+            )
+
+        return (
+            self.query_engine,
+            self.query_resource_holder,
+            self.query_uow,
+        )

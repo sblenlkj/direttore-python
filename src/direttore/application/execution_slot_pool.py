@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-from direttore.application.base_execution_slot import (
-    BaseExecutionSlot,
-)
+from direttore.application.base_execution_slot import BaseExecutionSlot
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,21 +21,18 @@ class ExecutionSlotPool[SlotT: BaseExecutionSlot]:
 
     The pool owns a bounded set of execution slots.
 
-    It creates `initial_slot_count` slots during initialization. If all slots
-    are busy and the pool has not reached `max_slot_count`, it creates a new
-    slot. If the pool is already at max size, acquire waits until another task
-    releases a slot.
+    It creates ``initial_slot_count`` slots during initialization. If all slots
+    are busy and the pool has not reached ``max_slot_count``, it creates a new
+    slot. If the pool is already at maximum size, acquisition waits until
+    another task releases a slot.
 
-    Slot lifecycle:
+    Usage:
 
-        slot = await pool.acquire()
-        try:
-            ...
-        finally:
-            await pool.release(slot)
+        async with pool.acquire() as slot:
+            await slot.handle(...)
 
-    `release(...)` calls `slot.reset()` before returning the slot to the free
-    pool.
+    The slot is reset and returned to the pool when the context exits,
+    including when execution raises an exception.
     """
 
     def __init__(
@@ -87,7 +83,18 @@ class ExecutionSlotPool[SlotT: BaseExecutionSlot]:
             max_slots=self.max_slot_count,
         )
 
-    async def acquire(self) -> SlotT:
+    @asynccontextmanager
+    async def acquire(
+        self,
+    ) -> AsyncGenerator[SlotT]:
+        slot = await self._acquire_slot()
+
+        try:
+            yield slot
+        finally:
+            await self._release_slot(slot)
+
+    async def _acquire_slot(self) -> SlotT:
         async with self._condition:
             while True:
                 if self._free_slot_ids:
@@ -99,7 +106,7 @@ class ExecutionSlotPool[SlotT: BaseExecutionSlot]:
 
                 await self._condition.wait()
 
-    async def release(
+    async def _release_slot(
         self,
         slot: SlotT,
     ) -> None:

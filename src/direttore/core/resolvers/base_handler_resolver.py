@@ -81,15 +81,11 @@ class BaseHandlerResolver[RegistrationT, HandlerT](ABC):
         if not validation_errors:
             return
 
-        joined_errors = "\n".join(
-            f"- {error}" for error in validation_errors
-        )
+        joined_errors = "\n".join(f"- {error}" for error in validation_errors)
 
-        raise HandlerValidationError(
-            f"Handler validation failed:\n{joined_errors}"
-        )
+        raise HandlerValidationError(f"Handler validation failed:\n{joined_errors}")
 
-    def resolve(
+    def resolve_registration(
         self,
         registration: RegistrationT,
         *,

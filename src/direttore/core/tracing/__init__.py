@@ -1,17 +1,15 @@
 from direttore.core.tracing.logging_tracer import (
-    LoggingTracer,
-    LoggingTraceSpan,
+    LoggingSpan,
+    LoggingSpanFactory,
 )
 from direttore.core.tracing.tracer import (
-    TraceResolver,
-    Tracer,
-    TraceSpan,
+    Span,
+    SpanFactory,
 )
 
 __all__ = [
-    "LoggingTracer",
-    "LoggingTraceSpan",
-    "TraceResolver",
-    "Tracer",
-    "TraceSpan",
+    "LoggingSpan",
+    "LoggingSpanFactory",
+    "Span",
+    "SpanFactory",
 ]

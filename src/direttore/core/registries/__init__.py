@@ -1,3 +1,4 @@
 from .event_handler_registry import EventHandlerRegistry
 from .query_handler_registry import QueryHandlerRegistry
 from .use_case_handler_registry import UseCaseHandlerRegistry
+from .registrations import UseCaseHandlerRegistration, QueryHandlerRegistration

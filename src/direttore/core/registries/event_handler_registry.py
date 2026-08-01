@@ -7,6 +7,8 @@ from direttore.core.contracts.handlers import EventHandler
 from direttore.core.contracts.messages import Event
 from direttore.core.registries.errors import (
     HandlerAlreadyRegisteredError,
+    HandlerKeyAlreadyRegisteredError,
+    HandlerKeyNotRegisteredError,
     HandlerNotRegisteredError,
     InvalidHandlerTypeError,
     InvalidMessageTypeError,
@@ -22,9 +24,14 @@ class EventHandlerRegistry:
         source_name: str | None = None,
     ) -> None:
         self.source_name = source_name
+
         self._registrations_by_event_type: dict[
             type[Event],
             list[EventHandlerRegistration],
+        ] = {}
+        self._registrations_by_saga_key: dict[
+            str,
+            EventHandlerRegistration,
         ] = {}
 
     def register(
@@ -32,6 +39,7 @@ class EventHandlerRegistry:
         event_type: type[Event],
         handler_type: type[EventHandler],
         *,
+        saga_key: str | None = None,
         is_ready: bool = True,
     ) -> None:
         self._validate_event_type(event_type)
@@ -40,19 +48,18 @@ class EventHandlerRegistry:
         registration = EventHandlerRegistration(
             event_type=event_type,
             handler_type=handler_type,
+            saga_key=saga_key,
             source_name=self.source_name,
             is_ready=is_ready,
         )
 
-        self._add_registration(
-            event_type=event_type,
-            registration=registration,
-        )
+        self._add_registration(registration)
 
     def decorator_register(
         self,
         event_type: type[Event],
         *,
+        saga_key: str | None = None,
         is_ready: bool = True,
     ) -> Callable[[type[EventHandler]], type[EventHandler]]:
         def decorator(
@@ -61,6 +68,7 @@ class EventHandlerRegistry:
             self.register(
                 event_type=event_type,
                 handler_type=handler_type,
+                saga_key=saga_key,
                 is_ready=is_ready,
             )
 
@@ -74,13 +82,22 @@ class EventHandlerRegistry:
     ) -> bool:
         return bool(self._registrations_by_event_type.get(event_type))
 
+    def has_saga_key(
+        self,
+        saga_key: str,
+    ) -> bool:
+        return saga_key in self._registrations_by_saga_key
+
     def get_registrations(
         self,
         event_type: type[Event],
         *,
         ready_only: bool = True,
     ) -> list[EventHandlerRegistration]:
-        registrations = self._registrations_by_event_type.get(event_type, [])
+        registrations = self._registrations_by_event_type.get(
+            event_type,
+            [],
+        )
 
         if ready_only:
             registrations = [
@@ -97,6 +114,24 @@ class EventHandlerRegistry:
 
         return list(registrations)
 
+    def get_registration_by_saga_key(
+        self,
+        saga_key: str,
+        *,
+        ready_only: bool = True,
+    ) -> EventHandlerRegistration:
+        registration = self._registrations_by_saga_key.get(saga_key)
+
+        if registration is None or (
+            ready_only and not registration.is_ready
+        ):
+            raise HandlerKeyNotRegisteredError(
+                f"No event handler registered for saga key "
+                f"'{saga_key}'."
+            )
+
+        return registration
+
     def get_handler_types(
         self,
         event_type: type[Event],
@@ -111,32 +146,62 @@ class EventHandlerRegistry:
             )
         ]
 
-    def iter_registrations(self) -> Iterable[EventHandlerRegistration]:
+    def get_handler_type_by_saga_key(
+        self,
+        saga_key: str,
+        *,
+        ready_only: bool = True,
+    ) -> type[EventHandler]:
+        return self.get_registration_by_saga_key(
+            saga_key,
+            ready_only=ready_only,
+        ).handler_type
+
+    def iter_registrations(
+        self,
+    ) -> Iterable[EventHandlerRegistration]:
         for registrations in self._registrations_by_event_type.values():
             yield from registrations
 
     def _add_registration(
         self,
-        *,
-        event_type: type[Event],
         registration: EventHandlerRegistration,
     ) -> None:
-        registrations = self._registrations_by_event_type.setdefault(
+        event_type = registration.event_type
+        saga_key = registration.saga_key
+
+        existing_registrations = self._registrations_by_event_type.get(
             event_type,
             [],
         )
 
-        for existing_registration in registrations:
+        for existing_registration in existing_registrations:
             if existing_registration.handler_type is registration.handler_type:
                 raise HandlerAlreadyRegisteredError(
                     f"Handler "
                     f"'{registration.handler_type.__module__}."
                     f"{registration.handler_type.__qualname__}' "
                     f"is already registered for event type "
-                    f"'{event_type.__module__}.{event_type.__qualname__}'."
+                    f"'{event_type.__module__}."
+                    f"{event_type.__qualname__}'."
                 )
 
-        registrations.append(registration)
+        if (
+            saga_key is not None
+            and saga_key in self._registrations_by_saga_key
+        ):
+            raise HandlerKeyAlreadyRegisteredError(
+                f"Event handler saga key '{saga_key}' "
+                f"is already registered."
+            )
+
+        self._registrations_by_event_type.setdefault(
+            event_type,
+            [],
+        ).append(registration)
+
+        if saga_key is not None:
+            self._registrations_by_saga_key[saga_key] = registration
 
     @classmethod
     def merge_many(
@@ -149,10 +214,7 @@ class EventHandlerRegistry:
 
         for registry in registries:
             for registration in registry.iter_registrations():
-                merged._add_registration(
-                    event_type=registration.event_type,
-                    registration=registration,
-                )
+                merged._add_registration(registration)
 
         return merged
 

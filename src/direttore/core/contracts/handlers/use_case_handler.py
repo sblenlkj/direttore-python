@@ -3,12 +3,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 from direttore.core.contracts.messages import UseCaseCommand
 from direttore.core.primitives.event_queue import EventQueue
 from direttore.core.primitives.uow import BaseUnitOfWork
 
+from direttore.core.tracing import Span
 
 @dataclass(frozen=True, slots=True)
 class UseCaseHandlerResult:
@@ -16,11 +16,15 @@ class UseCaseHandlerResult:
 
 
 @dataclass(slots=True)
-class UseCaseHandlerContext[UnitOfWorkT: BaseUnitOfWork, AuthT, TraceT]:
+class UseCaseHandlerContext[
+    UnitOfWorkT: BaseUnitOfWork,
+    LifecycleContextT,
+    SpanT: Span,
+]:
     uow: UnitOfWorkT
     queue: EventQueue
-    auth: AuthT | None = None
-    tracer: TraceT | None = None
+    lifecycle_context: LifecycleContextT | None
+    span: SpanT | None
 
 
 class UseCaseHandlerExecutionMode(StrEnum):
@@ -28,19 +32,21 @@ class UseCaseHandlerExecutionMode(StrEnum):
     AFTER_TRANSACTION = "after_transaction"
 
 
+class UseCaseEventDrainingMode(StrEnum):
+    SEQUENTIAL = "sequential"
+    PARALLEL = "parallel"
+
+
 @dataclass(frozen=True, slots=True)
 class UseCaseHandlerConfig:
-    execution_mode: UseCaseHandlerExecutionMode = (
-        UseCaseHandlerExecutionMode.IN_TRANSACTION
-    )
     allowed_access_tags: frozenset[str] | None = None
 
 
 class UseCaseHandler(ABC):
     @abstractmethod
-    async def __call__(
+    async def handle(
         self,
         command: UseCaseCommand,
-        context: UseCaseHandlerContext[BaseUnitOfWork, Any, Any],
+        context: UseCaseHandlerContext[BaseUnitOfWork, object, Span],
     ) -> UseCaseHandlerResult:
         raise NotImplementedError

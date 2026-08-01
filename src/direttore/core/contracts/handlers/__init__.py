@@ -14,6 +14,7 @@ from direttore.core.contracts.handlers.use_case_handler import (
     UseCaseHandlerContext,
     UseCaseHandlerExecutionMode,
     UseCaseHandlerResult,
+    UseCaseEventDrainingMode,
 )
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "UseCaseHandlerContext",
     "UseCaseHandlerExecutionMode",
     "UseCaseHandlerResult",
+    "UseCaseEventDrainingMode",
 ]

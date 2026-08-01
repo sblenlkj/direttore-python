@@ -59,7 +59,7 @@ class UseCaseHandlerResolver(
     ) -> ResolvedHandler[UseCaseHandler, UseCaseHandlerRegistration]:
         registration = self.registry.get_registration(command_type)
 
-        return super().resolve(
+        return super().resolve_registration(
             registration=registration,
             overrides=overrides,
         )
@@ -72,7 +72,7 @@ class UseCaseHandlerResolver(
     ) -> ResolvedHandler[UseCaseHandler, UseCaseHandlerRegistration]:
         registration = self.registry.get_registration_by_key(key)
 
-        return super().resolve(
+        return super().resolve_registration(
             registration=registration,
             overrides=overrides,
         )
