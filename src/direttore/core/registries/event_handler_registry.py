@@ -40,15 +40,18 @@ class EventHandlerRegistry:
         handler_type: type[EventHandler],
         *,
         saga_key: str | None = None,
+        compensation_type: type[object] | None = None,
         is_ready: bool = True,
     ) -> None:
         self._validate_event_type(event_type)
         self._validate_handler_type(handler_type)
+        self._validate_saga_metadata(saga_key, compensation_type)
 
         registration = EventHandlerRegistration(
             event_type=event_type,
             handler_type=handler_type,
             saga_key=saga_key,
+            compensation_type=compensation_type,
             source_name=self.source_name,
             is_ready=is_ready,
         )
@@ -60,6 +63,7 @@ class EventHandlerRegistry:
         event_type: type[Event],
         *,
         saga_key: str | None = None,
+        compensation_type: type[object] | None = None,
         is_ready: bool = True,
     ) -> Callable[[type[EventHandler]], type[EventHandler]]:
         def decorator(
@@ -69,6 +73,7 @@ class EventHandlerRegistry:
                 event_type=event_type,
                 handler_type=handler_type,
                 saga_key=saga_key,
+                compensation_type=compensation_type,
                 is_ready=is_ready,
             )
 
@@ -101,9 +106,7 @@ class EventHandlerRegistry:
 
         if ready_only:
             registrations = [
-                registration
-                for registration in registrations
-                if registration.is_ready
+                registration for registration in registrations if registration.is_ready
             ]
 
         if not registrations:
@@ -122,12 +125,9 @@ class EventHandlerRegistry:
     ) -> EventHandlerRegistration:
         registration = self._registrations_by_saga_key.get(saga_key)
 
-        if registration is None or (
-            ready_only and not registration.is_ready
-        ):
+        if registration is None or (ready_only and not registration.is_ready):
             raise HandlerKeyNotRegisteredError(
-                f"No event handler registered for saga key "
-                f"'{saga_key}'."
+                f"No event handler registered for saga key '{saga_key}'."
             )
 
         return registration
@@ -186,13 +186,9 @@ class EventHandlerRegistry:
                     f"{event_type.__qualname__}'."
                 )
 
-        if (
-            saga_key is not None
-            and saga_key in self._registrations_by_saga_key
-        ):
+        if saga_key is not None and saga_key in self._registrations_by_saga_key:
             raise HandlerKeyAlreadyRegisteredError(
-                f"Event handler saga key '{saga_key}' "
-                f"is already registered."
+                f"Event handler saga key '{saga_key}' is already registered."
             )
 
         self._registrations_by_event_type.setdefault(
@@ -241,3 +237,13 @@ class EventHandlerRegistry:
             f"Expected EventHandler subclass, got "
             f"'{handler_type.__module__}.{handler_type.__qualname__}'."
         )
+
+    @staticmethod
+    def _validate_saga_metadata(
+        saga_key: str | None,
+        compensation_type: type[object] | None,
+    ) -> None:
+        if (saga_key is None) != (compensation_type is None):
+            raise ValueError(
+                "saga_key and compensation_type must be provided together."
+            )

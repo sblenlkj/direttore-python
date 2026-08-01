@@ -4,10 +4,10 @@ from collections.abc import Callable, Iterable
 from typing import Self
 
 from direttore.core.contracts.handlers import (
+    UseCaseEventDrainingMode,
     UseCaseHandler,
     UseCaseHandlerConfig,
     UseCaseHandlerExecutionMode,
-    UseCaseEventDrainingMode,
 )
 from direttore.core.contracts.lifecycle import (
     DefaultUseCaseLifecycle,
@@ -42,9 +42,7 @@ class UseCaseHandlerRegistry:
             else DefaultUseCaseLifecycle()
         )
         self.default_config = (
-            default_config
-            if default_config is not None
-            else UseCaseHandlerConfig()
+            default_config if default_config is not None else UseCaseHandlerConfig()
         )
 
         self._registrations_by_command_type: dict[
@@ -67,6 +65,7 @@ class UseCaseHandlerRegistry:
         *,
         key: str | None = None,
         saga_key: str | None = None,
+        compensation_type: type[object] | None = None,
         config: UseCaseHandlerConfig | None = None,
         lifecycle: UseCaseLifecycle | None = None,
         execution_mode: UseCaseHandlerExecutionMode = (
@@ -78,19 +77,17 @@ class UseCaseHandlerRegistry:
     ) -> None:
         self._validate_command_type(command_type)
         self._validate_handler_type(handler_type)
+        self._validate_saga_metadata(saga_key, compensation_type)
 
         registration = UseCaseHandlerRegistration(
             command_type=command_type,
             handler_type=handler_type,
             key=key,
             saga_key=saga_key,
+            compensation_type=compensation_type,
             source_name=self.source_name,
             config=config if config is not None else self.default_config,
-            lifecycle=(
-                lifecycle
-                if lifecycle is not None
-                else self.default_lifecycle
-            ),
+            lifecycle=(lifecycle if lifecycle is not None else self.default_lifecycle),
             execution_mode=execution_mode,
             event_draining_mode=event_draining_mode,
         )
@@ -103,6 +100,7 @@ class UseCaseHandlerRegistry:
         *,
         key: str | None = None,
         saga_key: str | None = None,
+        compensation_type: type[object] | None = None,
         config: UseCaseHandlerConfig | None = None,
         lifecycle: UseCaseLifecycle | None = None,
         execution_mode: UseCaseHandlerExecutionMode = (
@@ -120,6 +118,7 @@ class UseCaseHandlerRegistry:
                 handler_type=handler_type,
                 key=key,
                 saga_key=saga_key,
+                compensation_type=compensation_type,
                 config=config,
                 lifecycle=lifecycle,
                 execution_mode=execution_mode,
@@ -183,8 +182,7 @@ class UseCaseHandlerRegistry:
 
         if registration is None:
             raise HandlerKeyNotRegisteredError(
-                f"No use-case handler registered for saga key "
-                f"'{saga_key}'."
+                f"No use-case handler registered for saga key '{saga_key}'."
             )
 
         return registration
@@ -249,13 +247,9 @@ class UseCaseHandlerRegistry:
                 f"Use-case handler key '{key}' is already registered."
             )
 
-        if (
-            saga_key is not None
-            and saga_key in self._registrations_by_saga_key
-        ):
+        if saga_key is not None and saga_key in self._registrations_by_saga_key:
             raise HandlerKeyAlreadyRegisteredError(
-                f"Use-case handler saga key '{saga_key}' "
-                f"is already registered."
+                f"Use-case handler saga key '{saga_key}' is already registered."
             )
 
         self._registrations_by_command_type[command_type] = registration
@@ -310,3 +304,13 @@ class UseCaseHandlerRegistry:
             f"Expected UseCaseHandler subclass, got "
             f"'{handler_type.__module__}.{handler_type.__qualname__}'."
         )
+
+    @staticmethod
+    def _validate_saga_metadata(
+        saga_key: str | None,
+        compensation_type: type[object] | None,
+    ) -> None:
+        if (saga_key is None) != (compensation_type is None):
+            raise ValueError(
+                "saga_key and compensation_type must be provided together."
+            )

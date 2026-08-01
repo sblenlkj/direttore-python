@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable, Mapping
 from inspect import isawaitable
 from typing import Any
 
+from direttore.core.saga.models import SagaEntry
 
 type ResourceFactory = Callable[[], Any | Awaitable[Any]]
 
 
 class ResourceHolderError(Exception):
-    pass
+    """Base error for execution-scoped resource management."""
 
 
 class ResourceNotRegisteredError(ResourceHolderError):
@@ -26,22 +25,74 @@ class ResourceClosedError(ResourceHolderError):
     pass
 
 
-@dataclass()
-class BaseResourceHolder:
-    """Base execution-scoped lazy resource holder.
+class MultiResourceCommitError(ResourceHolderError):
+    """A deterministic best-effort commit failed after a partial commit."""
 
-    The holder owns resources created during one execution scope.
+    def __init__(
+        self,
+        *,
+        committed: list[str],
+        failed: str,
+        not_committed: list[str],
+    ) -> None:
+        self.committed = tuple(committed)
+        self.failed = failed
+        self.not_committed = tuple(not_committed)
+        super().__init__(
+            "Commit failed for resource "
+            f"{failed!r}; committed={committed!r}, "
+            f"not_committed={not_committed!r}. Direttore does not "
+            "guarantee atomicity across independent resources."
+        )
 
-    It starts without created resources. A resource is created only when `get()`
-    is called for its name. Repeated calls return the same resource instance.
 
-    Subclasses may override `close_all()` to close created resources explicitly.
-    The framework calls `_close_all()` on exit, which always runs `close_all()`
-    first and then clears internal resource references.
+class ResourceHolder:
+    """The single owner of lazy named resources for an execution slot.
+
+    A named resource is created on first access and cached until the holder is
+    closed. Commit intent is tracked independently per name and is monotonic:
+    a later write access upgrades a read resource, while a later read can never
+    downgrade a write resource.
+
+    Transaction boundaries are explicit. Slots call :meth:`open`,
+    :meth:`commit` or :meth:`rollback`, and :meth:`close`; the holder does not
+    decide when an application transaction should end.
     """
 
-    _factories: dict[str, ResourceFactory] = field(default_factory=dict)
-    _resources: dict[str, Any] = field(default_factory=dict)
+    def __init__(
+        self,
+        factories: Mapping[str, ResourceFactory] | None = None,
+    ) -> None:
+        self._factories = dict(factories or {})
+        self._resources: dict[str, Any] = {}
+        self._commit_required: dict[str, bool] = {}
+        self._saga_entries: list[SagaEntry] = []
+        self._is_open = False
+        self._is_finalized = False
+
+    @property
+    def is_open(self) -> bool:
+        return self._is_open
+
+    @property
+    def is_finalized(self) -> bool:
+        return self._is_finalized
+
+    @property
+    def has_open_resources(self) -> bool:
+        return bool(self._resources)
+
+    @property
+    def created_resource_names(self) -> tuple[str, ...]:
+        return tuple(self._resources)
+
+    @property
+    def commit_required(self) -> Mapping[str, bool]:
+        return dict(self._commit_required)
+
+    @property
+    def saga_entries(self) -> tuple[SagaEntry, ...]:
+        return tuple(self._saga_entries)
 
     def register(
         self,
@@ -52,9 +103,12 @@ class BaseResourceHolder:
     ) -> None:
         if name in self._factories and not override:
             raise ResourceAlreadyRegisteredError(
-                f"Resource '{name}' is already registered."
+                f"Resource {name!r} is already registered."
             )
-
+        if name in self._resources:
+            raise ResourceHolderError(
+                f"Cannot replace already-created resource {name!r}."
+            )
         self._factories[name] = factory
 
     def has(self, name: str) -> bool:
@@ -63,119 +117,108 @@ class BaseResourceHolder:
     def is_created(self, name: str) -> bool:
         return name in self._resources
 
-    async def get(self, name: str) -> Any:
-        if name in self._resources:
-            return self._resources[name]
-
-        if name not in self._factories:
-            raise ResourceNotRegisteredError(
-                f"Resource '{name}' is not registered."
+    async def open(self) -> None:
+        if self._is_open:
+            raise ResourceHolderError("ResourceHolder is already open.")
+        if self._resources:
+            raise ResourceHolderError(
+                "ResourceHolder still owns resources from a previous scope."
             )
+        self._is_open = True
+        self._is_finalized = False
 
+    async def get_session(
+        self,
+        name: str = "primary",
+        *,
+        commit: bool = False,
+    ) -> Any:
+        self._ensure_can_use_resources()
+        if name in self._resources:
+            if commit:
+                self._commit_required[name] = True
+            return self._resources[name]
+        if name not in self._factories:
+            raise ResourceNotRegisteredError(f"Resource {name!r} is not registered.")
         resource = self._factories[name]()
-
         if isawaitable(resource):
             resource = await resource
-
         self._resources[name] = resource
-
+        self._commit_required[name] = commit
         return resource
 
-    async def close_all(self) -> None:
-        """Override this hook to close created resources.
-
-        The default implementation does nothing. The framework clears internal
-        resource references after this hook finishes.
-
-        Example:
-
-            async def close_all(self) -> None:
-                if self.is_created("main_db"):
-                    session = await self.get("main_db")
-                    await session.close()
-
-                if self.is_created("redis"):
-                    redis = await self.get("redis")
-                    await redis.aclose()
-        """
-
-        return None
-
-    async def _close_all(self) -> None:
-        await self.close_all()
-        self._resources.clear()
-
-
-@dataclass()
-class QueryResourceHolder(BaseResourceHolder):
-    """Read-side execution-scoped resource holder.
-
-    Query execution does not commit or rollback resources.
-
-    It still supports explicit cleanup through `close_all()`. Subclass and
-    override `close_all()` when query resources need to be closed explicitly.
-    """
-
-    async def __aenter__(self) -> QueryResourceHolder:
-        return self
-
-    async def __aexit__(
+    async def get(
         self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: object,
-    ) -> bool:
-        await self._close_all()
-        return False
+        name: str,
+        *,
+        commit: bool = False,
+    ) -> Any:
+        """Return a named resource; retained as the generic accessor."""
+        return await self.get_session(name, commit=commit)
 
+    def append_saga_entry(self, entry: SagaEntry) -> None:
+        self._ensure_can_use_resources()
+        self._saga_entries.append(entry)
 
-@dataclass()
-class AbstractUseCaseResourceHolder(BaseResourceHolder, ABC):
-    """Write-side execution-scoped resource holder.
+    def clear_saga_entries(self) -> None:
+        self._saga_entries.clear()
 
-    The framework owns the async context manager protocol.
+    async def commit(self) -> None:
+        """Commit writes, rollback reads, and retain partial-failure details."""
+        self._ensure_can_finalize()
+        write_names = [name for name in self._resources if self._commit_required[name]]
+        read_names = [
+            name for name in self._resources if not self._commit_required[name]
+        ]
+        committed: list[str] = []
+        try:
+            for index, name in enumerate(write_names):
+                try:
+                    await self._call_resource(name, "commit")
+                except BaseException as exc:
+                    await self._rollback_names(write_names[index:])
+                    await self._rollback_names(read_names)
+                    raise MultiResourceCommitError(
+                        committed=committed,
+                        failed=name,
+                        not_committed=write_names[index + 1 :],
+                    ) from exc
+                committed.append(name)
+            await self._rollback_names(read_names)
+            self._is_finalized = True
+        finally:
+            if self._is_finalized:
+                self.clear_saga_entries()
 
-    On successful execution, `__aexit__` calls `commit()`.
-    On failed execution, `__aexit__` calls `rollback()`.
-    In both cases, `__aexit__` then closes resources through `_close_all()`.
+    async def rollback(self) -> None:
+        self._ensure_open()
+        if self._is_finalized:
+            return
+        try:
+            await self._rollback_names(list(self._resources))
+        finally:
+            self._is_finalized = True
+            self.clear_saga_entries()
 
-    Concrete implementations must define `commit()` and `rollback()`.
+    async def close(self) -> None:
+        """Close every created resource and make the holder reusable."""
+        first_error: BaseException | None = None
+        for name in reversed(tuple(self._resources)):
+            try:
+                await self._call_resource(name, "close")
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        self._resources.clear()
+        self._commit_required.clear()
+        self._saga_entries.clear()
+        self._is_open = False
+        self._is_finalized = False
+        if first_error is not None:
+            raise first_error
 
-    `commit()` and `rollback()` should only touch resources that were actually
-    created during execution. Use `is_created(name)` before calling `get(name)`,
-    otherwise a resource may be created only to be committed or rolled back.
-
-    `close_all()` may be overridden when resources need explicit cleanup. The
-    framework always clears internal resource references after `close_all()`
-    finishes, so user code should not clear holder state manually.
-
-    After the use case execution scope exits, the holder is closed. Any attempt
-    to access resources through `get()` will fail fast with `ResourceClosedError`.
-    This protects out-of-transaction event handlers from accidentally touching
-    transactional resources.
-
-    Example:
-
-        async def commit(self) -> None:
-            if self.is_created("main_db"):
-                session = await self.get("main_db")
-                await session.commit()
-
-        async def rollback(self) -> None:
-            if self.is_created("main_db"):
-                session = await self.get("main_db")
-                await session.rollback()
-
-        async def close_all(self) -> None:
-            if self.is_created("main_db"):
-                session = await self.get("main_db")
-                await session.close()
-    """
-
-    _is_open: bool = False
-
-    async def __aenter__(self) -> AbstractUseCaseResourceHolder:
-        self._is_open = True
+    async def __aenter__(self) -> ResourceHolder:
+        await self.open()
         return self
 
     async def __aexit__(
@@ -190,32 +233,47 @@ class AbstractUseCaseResourceHolder(BaseResourceHolder, ABC):
             else:
                 await self.rollback()
         finally:
-            await self._close_all()
-            self._is_open = False
-
+            await self.close()
         return False
 
-    async def get(self, name: str) -> Any:
-        self._ensure_open()
-        return await super().get(name)
+    async def _rollback_names(self, names: list[str]) -> None:
+        first_error: BaseException | None = None
+        for name in names:
+            try:
+                await self._call_resource(name, "rollback")
+            except BaseException as exc:
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+
+    async def _call_resource(self, name: str, method_name: str) -> None:
+        method = getattr(self._resources[name], method_name, None)
+        if method is None:
+            return
+        result = method()
+        if isawaitable(result):
+            await result
 
     def _ensure_open(self) -> None:
-        if self._is_open:
-            return
+        if not self._is_open:
+            raise ResourceClosedError("ResourceHolder is not open.")
 
-        raise ResourceClosedError(
-            "UseCaseResourceHolder is closed. "
-            "You are trying to access execution-scoped resources after the "
-            "use case execution scope has already finished. "
-            "This usually means that an event handler is running outside the "
-            "transactional phase but still tries to access transactional "
-            "resources through UnitOfWork / ResourceHolder."
-        )
+    def _ensure_can_finalize(self) -> None:
+        self._ensure_open()
+        if self._is_finalized:
+            raise ResourceHolderError(
+                "ResourceHolder transaction is already finalized."
+            )
 
-    @abstractmethod
-    async def commit(self) -> None:
-        raise NotImplementedError
+    def _ensure_can_use_resources(self) -> None:
+        self._ensure_open()
+        if self._is_finalized:
+            raise ResourceClosedError(
+                "ResourceHolder transaction is already finalized."
+            )
 
-    @abstractmethod
-    async def rollback(self) -> None:
-        raise NotImplementedError
+
+# A neutral compatibility name for code that previously depended on the base
+# holder without choosing read-side or write-side ownership.
+BaseResourceHolder = ResourceHolder

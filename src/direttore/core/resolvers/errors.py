@@ -13,5 +13,6 @@ class HandlerDependencyResolutionError(ResolverError):
 class HandlerWarmUpError(ResolverError):
     pass
 
+
 class HandlerValidationError(ResolverError):
     pass

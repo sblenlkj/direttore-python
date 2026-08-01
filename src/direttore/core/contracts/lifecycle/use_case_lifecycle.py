@@ -1,6 +1,7 @@
 from direttore.core.contracts.handlers.use_case_handler import UseCaseHandlerConfig
 from direttore.core.primitives.uow import BaseUnitOfWork
 
+
 class UseCaseLifecycle[InputT, LifecycleContextT, UowT: BaseUnitOfWork]:
     async def create_context(
         self,

@@ -7,8 +7,8 @@ from enum import StrEnum
 from direttore.core.contracts.messages import UseCaseCommand
 from direttore.core.primitives.event_queue import EventQueue
 from direttore.core.primitives.uow import BaseUnitOfWork
-
 from direttore.core.tracing import Span
+
 
 @dataclass(frozen=True, slots=True)
 class UseCaseHandlerResult:

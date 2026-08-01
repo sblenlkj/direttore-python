@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
 
 from direttore.core.contracts.messages import Query
 from direttore.core.primitives.uow import BaseUnitOfWork
-
 from direttore.core.tracing import Span
+
 
 @dataclass(frozen=True, slots=True)
 class QueryHandlerResult:

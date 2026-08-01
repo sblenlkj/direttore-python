@@ -1,61 +1,51 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from direttore.core.contracts.handlers import (
     EventHandler,
     QueryHandler,
     QueryHandlerConfig,
+    UseCaseEventDrainingMode,
     UseCaseHandler,
     UseCaseHandlerConfig,
     UseCaseHandlerExecutionMode,
-    UseCaseEventDrainingMode,
 )
-from direttore.core.contracts.messages import (
-    Event,
-    Query,
-    UseCaseCommand,
-)
-from direttore.core.contracts.lifecycle import UseCaseLifecycle, QueryLifecycle
+from direttore.core.contracts.lifecycle import QueryLifecycle, UseCaseLifecycle
+from direttore.core.contracts.messages import Event, Query, UseCaseCommand
 
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class BaseHandlerRegistration:
-    source_name: str | None = None
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class BaseKeyedHandlerRegistration(BaseHandlerRegistration):
-    key: str | None = None
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class BaseSagaKeyedHandlerRegistration(BaseHandlerRegistration):
-    saga_key: str | None = None
 
 @dataclass(frozen=True, slots=True)
-class UseCaseHandlerRegistration(BaseKeyedHandlerRegistration, BaseSagaKeyedHandlerRegistration):
+class UseCaseHandlerRegistration:
     command_type: type[UseCaseCommand]
     handler_type: type[UseCaseHandler]
     lifecycle: UseCaseLifecycle
     config: UseCaseHandlerConfig
+    key: str | None = None
+    saga_key: str | None = None
+    compensation_type: type[object] | None = None
+    source_name: str | None = None
     execution_mode: UseCaseHandlerExecutionMode = (
         UseCaseHandlerExecutionMode.IN_TRANSACTION
     )
-    event_draining_mode: UseCaseEventDrainingMode = (
-        UseCaseEventDrainingMode.SEQUENTIAL
-    )
+    event_draining_mode: UseCaseEventDrainingMode = UseCaseEventDrainingMode.SEQUENTIAL
 
 
 @dataclass(frozen=True, slots=True)
-class QueryHandlerRegistration(BaseKeyedHandlerRegistration):
+class QueryHandlerRegistration:
     query_type: type[Query]
     handler_type: type[QueryHandler]
     lifecycle: QueryLifecycle
     config: QueryHandlerConfig
+    key: str | None = None
+    source_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class EventHandlerRegistration(BaseSagaKeyedHandlerRegistration):
+class EventHandlerRegistration:
     event_type: type[Event]
     handler_type: type[EventHandler]
+    saga_key: str | None = None
+    compensation_type: type[object] | None = None
+    source_name: str | None = None
     is_ready: bool = True

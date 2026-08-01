@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import Any, Self
+from typing import Self
 
 from direttore.core.contracts.handlers import (
     QueryHandler,
@@ -40,9 +40,7 @@ class QueryHandlerRegistry:
             else DefaultQueryLifecycle()
         )
         self.default_config = (
-            default_config
-            if default_config is not None
-            else QueryHandlerConfig()
+            default_config if default_config is not None else QueryHandlerConfig()
         )
 
         self._registrations_by_query_type: dict[
@@ -72,11 +70,7 @@ class QueryHandlerRegistry:
             key=key,
             source_name=self.source_name,
             config=config if config is not None else self.default_config,
-            lifecycle=(
-                lifecycle
-                if lifecycle is not None
-                else self.default_lifecycle
-            ),
+            lifecycle=(lifecycle if lifecycle is not None else self.default_lifecycle),
         )
 
         self._add_registration(registration)

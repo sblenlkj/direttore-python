@@ -79,6 +79,17 @@ class EventHandlerResolver(
 
         return resolved_handlers
 
+    def resolve_by_saga_key(
+        self,
+        saga_key: str,
+        *,
+        overrides: Mapping[type[Any], Any] | None = None,
+    ) -> ResolvedHandler[EventHandler, EventHandlerRegistration]:
+        return super().resolve_registration(
+            registration=self.registry.get_registration_by_saga_key(saga_key),
+            overrides=overrides,
+        )
+
     def _get_handler_type(
         self,
         registration: EventHandlerRegistration,

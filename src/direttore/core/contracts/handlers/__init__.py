@@ -9,12 +9,12 @@ from direttore.core.contracts.handlers.query_handler import (
     QueryHandlerResult,
 )
 from direttore.core.contracts.handlers.use_case_handler import (
+    UseCaseEventDrainingMode,
     UseCaseHandler,
     UseCaseHandlerConfig,
     UseCaseHandlerContext,
     UseCaseHandlerExecutionMode,
     UseCaseHandlerResult,
-    UseCaseEventDrainingMode,
 )
 
 __all__ = [

@@ -1,6 +1,7 @@
 from direttore.core.contracts.handlers.query_handler import QueryHandlerConfig
 from direttore.core.primitives.uow import BaseUnitOfWork
 
+
 class QueryLifecycle[InputT, LifecycleContextT, UowT: BaseUnitOfWork]:
     async def create_context(
         self,
