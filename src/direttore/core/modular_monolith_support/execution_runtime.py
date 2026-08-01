@@ -41,7 +41,7 @@ class ModularMonolithExecutionRuntime:
     """Slot-owned runtime for in-process bounded-context invocations.
 
     The runtime owns routing dependencies, dependency overrides, the event
-    queue, and the lifecycle context installed by the active engine execution.
+    queue, and the lifecycle context installed by the active slot operation.
 
     Tracing state is never stored in the runtime. A caller may pass its current
     span to invoke(...) or invoke_query(...). The runtime then creates a child
@@ -132,8 +132,7 @@ class ModularMonolithExecutionRuntime:
             )
 
             child.add_event("runtime.invoke.finished")
-
-        return result
+            return result
 
     async def invoke_query(
         self,
@@ -186,8 +185,7 @@ class ModularMonolithExecutionRuntime:
             )
 
             child.add_event("runtime.invoke_query.finished")
-
-        return result
+            return result
 
     async def _invoke(
         self,
@@ -241,10 +239,8 @@ class ModularMonolithExecutionRuntime:
             UseCaseHandlerRegistration,
         ],
     ) -> BaseUnitOfWork:
-        root_uow_type = (
-            self._use_case_uow_routing.get_uow_type_by_handler_type(
-                resolved.handler_type,
-            )
+        root_uow_type = self._use_case_uow_routing.get_uow_type_by_handler_type(
+            resolved.handler_type,
         )
 
         return self._coordinator.get_use_case_uow(root_uow_type)
@@ -274,9 +270,7 @@ class ModularMonolithExecutionRuntime:
         message: UseCaseCommand | Query,
         source_name: str | None,
     ) -> str:
-        message_name = (
-            f"{type(message).__module__}.{type(message).__qualname__}"
-        )
+        message_name = f"{type(message).__module__}.{type(message).__qualname__}"
 
         if source_name is None:
             return f"{operation} {message_name}"
@@ -297,9 +291,7 @@ class ModularMonolithExecutionRuntime:
             "message.type": (
                 f"{type(message).__module__}.{type(message).__qualname__}"
             ),
-            "handler.type": (
-                f"{handler_type.__module__}.{handler_type.__qualname__}"
-            ),
+            "handler.type": (f"{handler_type.__module__}.{handler_type.__qualname__}"),
             "handler.source_name": source_name,
             "handler.key": key,
             "invocation.kind": "bounded_context",

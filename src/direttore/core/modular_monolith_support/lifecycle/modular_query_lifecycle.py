@@ -15,5 +15,10 @@ class ModularQueryLifecycle[InputT, LifecycleContextT]:
 
 
 class DefaultModularQueryLifecycle(ModularQueryLifecycle[object, None]):
-    async def create_context(self) -> None:
+    async def create_context(
+        self,
+        input: object,
+        config: QueryHandlerConfig,
+        coordinator: ModularUnitOfWorkCoordinator,
+    ) -> None:
         return None

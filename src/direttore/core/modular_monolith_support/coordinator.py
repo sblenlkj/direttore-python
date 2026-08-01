@@ -4,10 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from typing import cast
 
-from direttore.core.primitives.resource_holder import (
-    AbstractUseCaseResourceHolder,
-    QueryResourceHolder,
-)
+from direttore.core.primitives.resource_holder import ResourceHolder
 from direttore.core.primitives.uow import BaseUnitOfWork
 
 
@@ -36,11 +33,9 @@ class ModularUnitOfWorkCoordinator(ABC):
     def __init__(
         self,
         *,
-        use_case_resource_holder: AbstractUseCaseResourceHolder,
-        query_resource_holder: QueryResourceHolder | None = None,
+        resource_holder: ResourceHolder,
     ) -> None:
-        self.use_case_resource_holder = use_case_resource_holder
-        self.query_resource_holder = query_resource_holder
+        self.resource_holder = resource_holder
 
         self._use_case_uows: dict[
             type[BaseUnitOfWork],
@@ -63,13 +58,13 @@ class ModularUnitOfWorkCoordinator(ABC):
 
             self.register_use_case_uow(
                 OrdersUseCaseUnitOfWork(
-                    resources=self.use_case_resource_holder,
+                    resources=self.resource_holder,
                 )
             )
 
             self.register_query_uow(
                 OrdersQueryUnitOfWork(
-                    resources=self.query_resource_holder,
+                    resources=self.resource_holder,
                 )
             )
 
@@ -169,9 +164,7 @@ class ModularUnitOfWorkCoordinator(ABC):
         uow_type: type[BaseUnitOfWork],
     ) -> None:
         if not isinstance(uow_type, type):
-            raise TypeError(
-                f"Unit of Work type must be a type, got {uow_type!r}."
-            )
+            raise TypeError(f"Unit of Work type must be a type, got {uow_type!r}.")
 
         if not issubclass(uow_type, BaseUnitOfWork):
             raise TypeError(

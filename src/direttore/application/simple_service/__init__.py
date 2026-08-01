@@ -1,8 +1,23 @@
-from .config import (
+from direttore.application.simple_service.config import (
     SimpleServiceDirettoreConfig,
-    SimpleServiceAuthConfig,
-    SimpleServiceTracingConfig,
+    SimpleServiceHandlerConfig,
+    SimpleServiceQueryExecutionConfig,
     SimpleServiceSlotConfig,
+    SimpleServiceUseCaseExecutionConfig,
+)
+from direttore.application.simple_service.direttore_application import (
+    SimpleServiceDirettoreApplication,
+)
+from direttore.application.simple_service.execution_slot import (
+    SimpleServiceExecutionSlot,
 )
 
-from .direttore_application import SimpleServiceDirettoreApplication
+__all__ = [
+    "SimpleServiceDirettoreApplication",
+    "SimpleServiceDirettoreConfig",
+    "SimpleServiceExecutionSlot",
+    "SimpleServiceHandlerConfig",
+    "SimpleServiceQueryExecutionConfig",
+    "SimpleServiceSlotConfig",
+    "SimpleServiceUseCaseExecutionConfig",
+]

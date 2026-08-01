@@ -3,86 +3,36 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from direttore.core.engines.simple_service.simple_service_config import (
-    SimpleServiceUseCaseEngineConfig,
-    SimpleServiceQueryEngineConfig,
-)
-from direttore.core.primitives.resource_holder import (
-    AbstractUseCaseResourceHolder,
-    QueryResourceHolder,
-)
+from direttore.core.contracts.operation_loader import SimpleServiceOperationLoader
+from direttore.core.primitives.resource_holder import ResourceHolder
 from direttore.core.primitives.uow import BaseUnitOfWork
-from direttore.core.registries.event_handler_registry import (
-    EventHandlerRegistry,
-)
-from direttore.core.registries.query_handler_registry import (
-    QueryHandlerRegistry,
-)
+from direttore.core.registries.event_handler_registry import EventHandlerRegistry
+from direttore.core.registries.query_handler_registry import QueryHandlerRegistry
 from direttore.core.registries.use_case_handler_registry import (
     UseCaseHandlerRegistry,
 )
+from direttore.core.saga import SagaJournal
 from direttore.core.tracing import SpanFactory
 
-
-type UseCaseResourceHolderFactory = Callable[
-    [],
-    AbstractUseCaseResourceHolder,
-]
-
-type QueryResourceHolderFactory = Callable[
-    [],
-    QueryResourceHolder,
-]
-
-type UseCaseUnitOfWorkFactory = Callable[
-    [AbstractUseCaseResourceHolder],
-    BaseUnitOfWork,
-]
-
-type QueryUnitOfWorkFactory = Callable[
-    [QueryResourceHolder],
-    BaseUnitOfWork,
-]
+type ResourceHolderFactory = Callable[[], ResourceHolder]
+type UnitOfWorkFactory = Callable[[ResourceHolder], BaseUnitOfWork]
 
 
-class SimpleServiceConfigError(Exception):
-    pass
+@dataclass(frozen=True, slots=True)
+class SimpleServiceUseCaseExecutionConfig:
+    operation_loader: SimpleServiceOperationLoader | None = None
+    max_processed_events: int = 100
 
 
-class InvalidSimpleServiceSlotConfigError(SimpleServiceConfigError):
-    pass
-
-
-class InvalidSimpleServiceHandlerConfigError(SimpleServiceConfigError):
-    pass
+@dataclass(frozen=True, slots=True)
+class SimpleServiceQueryExecutionConfig:
+    operation_loader: SimpleServiceOperationLoader | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class SimpleServiceSlotConfig:
-    use_case_resource_holder_factory: UseCaseResourceHolderFactory
-    use_case_uow_factory: UseCaseUnitOfWorkFactory
-    query_resource_holder_factory: QueryResourceHolderFactory | None = None
-    query_uow_factory: QueryUnitOfWorkFactory | None = None
-
-    def __post_init__(self) -> None:
-        has_query_resource_holder_factory = (
-            self.query_resource_holder_factory is not None
-        )
-        has_query_uow_factory = self.query_uow_factory is not None
-
-        if has_query_resource_holder_factory != has_query_uow_factory:
-            raise InvalidSimpleServiceSlotConfigError(
-                "Query slot configuration is incomplete. "
-                "Both query_resource_holder_factory and query_uow_factory "
-                "must be provided together."
-            )
-
-    @property
-    def has_query(self) -> bool:
-        return (
-            self.query_resource_holder_factory is not None
-            and self.query_uow_factory is not None
-        )
+    resource_holder_factory: ResourceHolderFactory
+    uow_factory: UnitOfWorkFactory
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,22 +47,10 @@ class SimpleServiceDirettoreConfig:
     slot: SimpleServiceSlotConfig
     handlers: SimpleServiceHandlerConfig
     span_factory: SpanFactory[object] | None = None
-    use_case_engine: SimpleServiceUseCaseEngineConfig = field(
-        default_factory=SimpleServiceUseCaseEngineConfig,
+    saga_journal: SagaJournal | None = None
+    use_case_execution: SimpleServiceUseCaseExecutionConfig = field(
+        default_factory=SimpleServiceUseCaseExecutionConfig,
     )
-    query_engine: SimpleServiceQueryEngineConfig = field(
-        default_factory=SimpleServiceQueryEngineConfig,
+    query_execution: SimpleServiceQueryExecutionConfig = field(
+        default_factory=SimpleServiceQueryExecutionConfig,
     )
-
-    def __post_init__(self) -> None:
-        if self.slot.has_query and self.handlers.query_registry is None:
-            raise InvalidSimpleServiceHandlerConfigError(
-                "query_registry is required when query slot configuration is "
-                "provided."
-            )
-
-        if not self.slot.has_query and self.handlers.query_registry is not None:
-            raise InvalidSimpleServiceHandlerConfigError(
-                "query_registry was provided, but query slot configuration is "
-                "not configured."
-            )

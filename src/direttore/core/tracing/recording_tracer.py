@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from time import perf_counter
 from types import TracebackType
-from typing import Any
+from typing import Any, Literal
 
 from direttore.core.tracing.tracer import Span, SpanFactory
 
@@ -67,9 +67,7 @@ class RecordingSpan(Span):
 
     async def __aenter__(self) -> RecordingSpan:
         if self._entered:
-            raise RuntimeError(
-                f"Span {self._node.name!r} has already been entered."
-            )
+            raise RuntimeError(f"Span {self._node.name!r} has already been entered.")
 
         self._entered = True
         self._node.started_at = perf_counter()
@@ -81,16 +79,12 @@ class RecordingSpan(Span):
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         if not self._entered:
-            raise RuntimeError(
-                f"Span {self._node.name!r} was not entered."
-            )
+            raise RuntimeError(f"Span {self._node.name!r} was not entered.")
 
         if self._finished:
-            raise RuntimeError(
-                f"Span {self._node.name!r} has already been finished."
-            )
+            raise RuntimeError(f"Span {self._node.name!r} has already been finished.")
 
         if exc_type is not None:
             self._node.error = exc_type.__qualname__
@@ -119,22 +113,16 @@ class RecordingSpan(Span):
 
     def _ensure_active(self) -> None:
         if not self._entered:
-            raise RuntimeError(
-                f"Span {self._node.name!r} has not been entered."
-            )
+            raise RuntimeError(f"Span {self._node.name!r} has not been entered.")
 
         if self._finished:
-            raise RuntimeError(
-                f"Span {self._node.name!r} has already been finished."
-            )
+            raise RuntimeError(f"Span {self._node.name!r} has already been finished.")
 
 
 @dataclass(frozen=True, slots=True)
 class RecordingSpanFactory[TraceT](SpanFactory[TraceT]):
     logger: logging.Logger = field(
-        default_factory=lambda: logging.getLogger(
-            "direttore.tracing"
-        )
+        default_factory=lambda: logging.getLogger("direttore.tracing")
     )
     level: int = logging.DEBUG
     log_on_exit: bool = True
@@ -169,12 +157,7 @@ class RecordingSpanFactory[TraceT](SpanFactory[TraceT]):
 def render_trace(
     root: SpanNode,
 ) -> str:
-    lines = [
-        (
-            f"Trace [{root.status}] "
-            f"{_format_duration(root.duration_ms)}"
-        )
-    ]
+    lines = [(f"Trace [{root.status}] {_format_duration(root.duration_ms)}")]
 
     _render_node(
         node=root,
@@ -204,9 +187,7 @@ def _render_node(
 
     lines.append(line)
 
-    child_prefix = (
-        f"{prefix}{'    ' if connector == '└──' else '│   '}"
-    )
+    child_prefix = f"{prefix}{'    ' if connector == '└──' else '│   '}"
     last_index = len(node.children) - 1
 
     for index, child in enumerate(node.children):

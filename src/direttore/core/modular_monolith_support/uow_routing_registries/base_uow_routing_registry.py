@@ -96,9 +96,7 @@ class BaseUowRoutingRegistry:
         if isinstance(handler_type, type):
             return
 
-        raise TypeError(
-            f"Handler type must be a type, got {handler_type!r}."
-        )
+        raise TypeError(f"Handler type must be a type, got {handler_type!r}.")
 
     def _validate_uow_type(
         self,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from direttore.core.contracts.handlers import EventHandlerContext
 from direttore.core.contracts.messages import Event
 from direttore.core.event_dispatchers.base_event_dispatcher import (
@@ -29,18 +31,20 @@ class SimpleServiceEventDispatcher(BaseEventDispatcher):
         event: Event,
         uow: BaseUnitOfWork,
         span: Span | None = None,
-    ) -> None:
+    ) -> list[tuple[Any, object]]:
         resolved_handlers = self.resolver.resolve(type(event))
+        results: list[tuple[Any, object]] = []
 
         for resolved in resolved_handlers:
             if span is None:
-                await resolved.handler.handle(
+                result = await resolved.handler.handle(
                     event,
                     EventHandlerContext(
                         uow=uow,
                         span=None,
                     ),
                 )
+                results.append((result, resolved.registration))
                 continue
 
             async with span.child(
@@ -54,10 +58,13 @@ class SimpleServiceEventDispatcher(BaseEventDispatcher):
                     source_name=resolved.registration.source_name,
                 ),
             ) as child:
-                await resolved.handler.handle(
+                result = await resolved.handler.handle(
                     event,
                     EventHandlerContext(
                         uow=uow,
                         span=child,
                     ),
                 )
+                results.append((result, resolved.registration))
+
+        return results

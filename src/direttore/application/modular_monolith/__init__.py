@@ -1,9 +1,23 @@
-from .config import (
-    ModularMonolithDirettoreContext,
-    ModularMonolithAuthConfig,
-    ModularMonolithTracingConfig,
-    ModularMonolithSlotConfig,
+from direttore.application.modular_monolith.config import (
     ModularMonolithDirettoreConfig,
+    ModularMonolithDirettoreContext,
+    ModularMonolithQueryExecutionConfig,
+    ModularMonolithSlotConfig,
+    ModularMonolithUseCaseExecutionConfig,
+)
+from direttore.application.modular_monolith.direttore_application import (
+    ModularMonolithDirettoreApplication,
+)
+from direttore.application.modular_monolith.execution_slot import (
+    ModularMonolithExecutionSlot,
 )
 
-from .direttore_application import ModularMonolithDirettoreApplication
+__all__ = [
+    "ModularMonolithDirettoreApplication",
+    "ModularMonolithDirettoreConfig",
+    "ModularMonolithDirettoreContext",
+    "ModularMonolithExecutionSlot",
+    "ModularMonolithQueryExecutionConfig",
+    "ModularMonolithSlotConfig",
+    "ModularMonolithUseCaseExecutionConfig",
+]

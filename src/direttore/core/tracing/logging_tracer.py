@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from time import perf_counter
 from types import TracebackType
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from direttore.core.tracing.tracer import (
@@ -58,9 +58,7 @@ class LoggingSpan(Span):
 
     async def __aenter__(self) -> LoggingSpan:
         if self._started_at is not None:
-            raise RuntimeError(
-                f"Span {self.name!r} has already been started."
-            )
+            raise RuntimeError(f"Span {self.name!r} has already been started.")
 
         self._started_at = perf_counter()
 
@@ -91,16 +89,12 @@ class LoggingSpan(Span):
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         if self._started_at is None:
-            raise RuntimeError(
-                f"Span {self.name!r} has not been started."
-            )
+            raise RuntimeError(f"Span {self.name!r} has not been started.")
 
         if self._finished:
-            raise RuntimeError(
-                f"Span {self.name!r} has already been finished."
-            )
+            raise RuntimeError(f"Span {self.name!r} has already been finished.")
 
         self._finished = True
         elapsed_ms = self._get_elapsed_ms()
@@ -154,12 +148,7 @@ class LoggingSpan(Span):
 
         self.logger.log(
             self.level,
-            (
-                "Trace span attribute: %s | "
-                "trace_id=%s | "
-                "span_id=%s | "
-                "%s=%r"
-            ),
+            ("Trace span attribute: %s | trace_id=%s | span_id=%s | %s=%r"),
             self.name,
             self.trace_id,
             self.span_id,
@@ -198,9 +187,7 @@ class LoggingSpan(Span):
 @dataclass(frozen=True, slots=True)
 class LoggingSpanFactory(SpanFactory[object]):
     logger: logging.Logger = field(
-        default_factory=lambda: logging.getLogger(
-            "direttore.tracing"
-        )
+        default_factory=lambda: logging.getLogger("direttore.tracing")
     )
     level: int = logging.DEBUG
 

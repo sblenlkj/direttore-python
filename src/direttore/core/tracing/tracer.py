@@ -3,8 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from types import TracebackType
-from typing import Any
-
+from typing import Any, Literal
 
 type SpanAttributes = Mapping[str, Any]
 
@@ -47,7 +46,7 @@ class Span(ABC):
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: TracebackType | None,
-    ) -> bool:
+    ) -> Literal[False]:
         """Finish the span and allow exceptions to propagate."""
         raise NotImplementedError
 
@@ -73,7 +72,7 @@ class Span(ABC):
 class SpanFactory[TraceT](ABC):
     """Creates root spans.
 
-    A span factory is configured on an engine or another execution boundary.
+    A span factory is configured on a physical slot execution boundary.
     It converts an application-specific trace value into a root span.
 
     The framework intentionally does not define the structure of ``TraceT``.

@@ -1,6 +1,6 @@
 from .coordinator import ModularUnitOfWorkCoordinator
 from .execution_dependencies import (
-    ModularMonolithExecutionDependencyRegistry,
     ModularMonolithExecutionDependencyContext,
+    ModularMonolithExecutionDependencyRegistry,
 )
 from .execution_runtime import ModularMonolithExecutionRuntime

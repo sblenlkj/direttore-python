@@ -27,9 +27,7 @@ class BaseEventDispatcher:
         source_name: str | None,
     ) -> dict[str, Any]:
         return {
-            "event.type": (
-                f"{type(event).__module__}.{type(event).__qualname__}"
-            ),
+            "event.type": (f"{type(event).__module__}.{type(event).__qualname__}"),
             "event.handler_type": (
                 f"{handler_type.__module__}.{handler_type.__qualname__}"
             ),

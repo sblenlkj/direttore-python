@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from direttore.core.modular_monolith_support.execution_runtime import (
@@ -145,6 +145,4 @@ class ModularMonolithExecutionDependencyRegistry:
         dependency_type: type[Any],
     ) -> None:
         if not isinstance(dependency_type, type):
-            raise TypeError(
-                f"Dependency type must be a type, got {dependency_type!r}."
-            )
+            raise TypeError(f"Dependency type must be a type, got {dependency_type!r}.")
