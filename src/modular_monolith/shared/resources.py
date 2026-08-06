@@ -1,0 +1,30 @@
+from inspect import isawaitable
+
+from direttore import ResourceHolder
+
+
+class ExampleResourceHolder(ResourceHolder):
+    async def commit(self) -> None:
+        self._ensure_not_finalized()
+        for name, resource in self._resources.items():
+            method = resource.commit if self._commit_required[name] else resource.rollback
+            result = method()
+            if isawaitable(result):
+                await result
+        self._mark_finalized()
+
+    async def rollback(self) -> None:
+        if self.is_finalized:
+            return
+        for resource in self._resources.values():
+            result = resource.rollback()
+            if isawaitable(result):
+                await result
+        self._mark_finalized()
+
+    async def close(self) -> None:
+        for resource in reversed(tuple(self._resources.values())):
+            result = resource.close()
+            if isawaitable(result):
+                await result
+

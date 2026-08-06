@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable
 from typing import Self
 
 from direttore.core.contracts.handlers import EventHandler
-from direttore.core.contracts.messages import Event
+from direttore.core.contracts.messages import Event, EventCompensation
 from direttore.core.registries.errors import (
     HandlerAlreadyRegisteredError,
     HandlerKeyAlreadyRegisteredError,
@@ -40,7 +40,7 @@ class EventHandlerRegistry:
         handler_type: type[EventHandler],
         *,
         saga_key: str | None = None,
-        compensation_type: type[object] | None = None,
+        compensation_type: type[EventCompensation] | None = None,
         is_ready: bool = True,
     ) -> None:
         self._validate_event_type(event_type)
@@ -63,7 +63,7 @@ class EventHandlerRegistry:
         event_type: type[Event],
         *,
         saga_key: str | None = None,
-        compensation_type: type[object] | None = None,
+        compensation_type: type[EventCompensation] | None = None,
         is_ready: bool = True,
     ) -> Callable[[type[EventHandler]], type[EventHandler]]:
         def decorator(
@@ -241,9 +241,15 @@ class EventHandlerRegistry:
     @staticmethod
     def _validate_saga_metadata(
         saga_key: str | None,
-        compensation_type: type[object] | None,
+        compensation_type: type[EventCompensation] | None,
     ) -> None:
         if (saga_key is None) != (compensation_type is None):
             raise ValueError(
                 "saga_key and compensation_type must be provided together."
+            )
+        if compensation_type is not None and not issubclass(
+            compensation_type, EventCompensation
+        ):
+            raise InvalidMessageTypeError(
+                "Event compensation type must inherit EventCompensation."
             )

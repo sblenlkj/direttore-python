@@ -4,11 +4,10 @@ from collections.abc import Mapping
 from typing import Any
 
 from direttore.core.contracts.handlers import UseCaseHandler
+from direttore.core.contracts.lifecycle import Lifecycle
 from direttore.core.contracts.messages import UseCaseCommand
 from direttore.core.primitives.container import Container
-from direttore.core.registries.registrations import (
-    UseCaseHandlerRegistration,
-)
+from direttore.core.registries.registrations import UseCaseHandlerRegistration
 from direttore.core.registries.use_case_handler_registry import (
     UseCaseHandlerRegistry,
 )
@@ -20,12 +19,12 @@ from direttore.core.resolvers.resolved_handlers import (
 )
 
 
-class UseCaseHandlerResolver(
-    BaseHandlerResolver[UseCaseHandlerRegistration, UseCaseHandler],
+class UseCaseHandlerResolver[LifecycleT: Lifecycle[Any, Any]](
+    BaseHandlerResolver[UseCaseHandlerRegistration[LifecycleT], UseCaseHandler],
 ):
     def __init__(
         self,
-        registry: UseCaseHandlerRegistry,
+        registry: UseCaseHandlerRegistry[LifecycleT],
         container: Container,
         *,
         execution_dependency_types: set[type[Any]] | None = None,
@@ -56,7 +55,7 @@ class UseCaseHandlerResolver(
         command_type: type[UseCaseCommand],
         *,
         overrides: Mapping[type[Any], Any] | None = None,
-    ) -> ResolvedHandler[UseCaseHandler, UseCaseHandlerRegistration]:
+    ) -> ResolvedHandler[UseCaseHandler, UseCaseHandlerRegistration[LifecycleT]]:
         registration = self.registry.get_registration(command_type)
 
         return super().resolve_registration(
@@ -69,7 +68,7 @@ class UseCaseHandlerResolver(
         key: str,
         *,
         overrides: Mapping[type[Any], Any] | None = None,
-    ) -> ResolvedHandler[UseCaseHandler, UseCaseHandlerRegistration]:
+    ) -> ResolvedHandler[UseCaseHandler, UseCaseHandlerRegistration[LifecycleT]]:
         registration = self.registry.get_registration_by_key(key)
 
         return super().resolve_registration(
@@ -82,7 +81,7 @@ class UseCaseHandlerResolver(
         saga_key: str,
         *,
         overrides: Mapping[type[Any], Any] | None = None,
-    ) -> ResolvedHandler[UseCaseHandler, UseCaseHandlerRegistration]:
+    ) -> ResolvedHandler[UseCaseHandler, UseCaseHandlerRegistration[LifecycleT]]:
         return super().resolve_registration(
             registration=self.registry.get_registration_by_saga_key(saga_key),
             overrides=overrides,
@@ -90,6 +89,6 @@ class UseCaseHandlerResolver(
 
     def _get_handler_type(
         self,
-        registration: UseCaseHandlerRegistration,
+        registration: UseCaseHandlerRegistration[LifecycleT],
     ) -> type[UseCaseHandler]:
         return registration.handler_type

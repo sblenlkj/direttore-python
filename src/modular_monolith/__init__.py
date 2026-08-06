@@ -1,0 +1,2 @@
+"""Modular-monolith warehouse example."""
+

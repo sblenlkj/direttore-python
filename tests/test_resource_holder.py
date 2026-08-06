@@ -3,22 +3,17 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from direttore.core.primitives import (
-    MultiResourceCommitError,
-    ResourceHolder,
-)
+from direttore.core.primitives import ResourceFinalizedError, ResourceHolder
+from tests.helpers import SessionResourceHolder
 
 
 @dataclass
 class Session:
     name: str
-    fail_commit: bool = False
     calls: list[str] = field(default_factory=list)
 
     async def commit(self) -> None:
         self.calls.append("commit")
-        if self.fail_commit:
-            raise RuntimeError("commit failed")
 
     async def rollback(self) -> None:
         self.calls.append("rollback")
@@ -31,6 +26,11 @@ def run(coro):
     return asyncio.run(coro)
 
 
+def test_resource_holder_requires_programmer_finalization_policy() -> None:
+    with pytest.raises(TypeError):
+        ResourceHolder()
+
+
 def test_named_resources_are_lazy_cached_and_commit_intent_is_monotonic() -> None:
     created: list[Session] = []
 
@@ -39,10 +39,9 @@ def test_named_resources_are_lazy_cached_and_commit_intent_is_monotonic() -> Non
         created.append(session)
         return session
 
-    holder = ResourceHolder({"primary": factory})
+    holder = SessionResourceHolder({"primary": factory})
 
     async def scenario() -> None:
-        await holder.open()
         assert created == []
         first = await holder.get_session("primary", commit=False)
         second = await holder.get_session("primary", commit=True)
@@ -50,20 +49,22 @@ def test_named_resources_are_lazy_cached_and_commit_intent_is_monotonic() -> Non
         assert first is second is third
         assert holder.commit_required == {"primary": True}
         await holder.rollback()
+        with pytest.raises(ResourceFinalizedError):
+            await holder.get_session("primary")
         await holder.close()
+        holder.reset()
 
     run(scenario())
 
 
-def test_success_commits_writes_and_rolls_back_reads_then_closes_all() -> None:
+def test_programmer_policy_commits_writes_and_rolls_back_reads() -> None:
     primary = Session("primary")
     analytics = Session("analytics")
-    holder = ResourceHolder(
+    holder = SessionResourceHolder(
         {"primary": lambda: primary, "analytics": lambda: analytics}
     )
 
     async def scenario() -> None:
-        await holder.open()
         await holder.get_session("analytics", commit=False)
         await holder.get_session("primary", commit=True)
         await holder.commit()
@@ -74,19 +75,15 @@ def test_success_commits_writes_and_rolls_back_reads_then_closes_all() -> None:
     assert analytics.calls == ["rollback", "close"]
 
 
-def test_failure_rolls_back_every_opened_session_and_zero_session_is_noop() -> None:
+def test_programmer_policy_rolls_back_and_closes_resources() -> None:
     one = Session("one")
     two = Session("two")
-    holder = ResourceHolder({"one": lambda: one, "two": lambda: two})
+    holder = SessionResourceHolder({"one": lambda: one, "two": lambda: two})
 
     async def scenario() -> None:
-        await holder.open()
         await holder.get_session("one", commit=True)
         await holder.get_session("two", commit=False)
         await holder.rollback()
-        await holder.close()
-        await holder.open()
-        await holder.commit()
         await holder.close()
 
     run(scenario())
@@ -94,37 +91,7 @@ def test_failure_rolls_back_every_opened_session_and_zero_session_is_noop() -> N
     assert two.calls == ["rollback", "close"]
 
 
-def test_partial_commit_error_reports_deterministic_progress() -> None:
-    orders = Session("orders")
-    billing = Session("billing", fail_commit=True)
-    analytics = Session("analytics")
-    holder = ResourceHolder(
-        {
-            "orders": lambda: orders,
-            "billing": lambda: billing,
-            "analytics": lambda: analytics,
-        }
-    )
-
-    async def scenario() -> MultiResourceCommitError:
-        await holder.open()
-        for name in ("orders", "billing", "analytics"):
-            await holder.get_session(name, commit=True)
-        with pytest.raises(MultiResourceCommitError) as captured:
-            await holder.commit()
-        await holder.close()
-        return captured.value
-
-    error = run(scenario())
-    assert error.committed == ("orders",)
-    assert error.failed == "billing"
-    assert error.not_committed == ("analytics",)
-    assert orders.calls == ["commit", "close"]
-    assert billing.calls == ["commit", "rollback", "close"]
-    assert analytics.calls == ["rollback", "close"]
-
-
-def test_holder_is_reusable_after_close() -> None:
+def test_holder_is_reusable_after_close_and_reset() -> None:
     created: list[Session] = []
 
     def factory() -> Session:
@@ -132,14 +99,18 @@ def test_holder_is_reusable_after_close() -> None:
         created.append(result)
         return result
 
-    holder = ResourceHolder({"primary": factory})
+    holder = SessionResourceHolder({"primary": factory})
 
     async def scenario() -> None:
-        for _ in range(2):
-            await holder.open()
+        for index in range(2):
+            holder.saga_id = f"saga-{index}"
             await holder.get_session("primary", commit=False)
             await holder.commit()
+            assert holder.saga_id == f"saga-{index}"
             await holder.close()
+            assert holder.saga_id == f"saga-{index}"
+            holder.reset()
+            assert holder.saga_id is None
 
     run(scenario())
     assert len(created) == 2

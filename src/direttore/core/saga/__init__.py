@@ -7,7 +7,6 @@ from direttore.core.saga.models import (
     SagaCompensationContext,
     SagaEntry,
     SagaHandlerKind,
-    SagaHandlerResult,
     SagaRecord,
 )
 
@@ -16,7 +15,6 @@ __all__ = [
     "SagaCompensationContext",
     "SagaEntry",
     "SagaHandlerKind",
-    "SagaHandlerResult",
     "SagaJournal",
     "SagaNotFoundError",
     "SagaRecord",

@@ -33,14 +33,7 @@ class SagaRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class SagaHandlerResult[ResultT, CompensationT]:
-    result: ResultT
-    compensation: CompensationT
-
-
-@dataclass(frozen=True, slots=True)
-class SagaCompensationContext:
+class SagaCompensationContext[UnitOfWorkT, SpanT]:
     saga_id: str
-    uow: object
-    lifecycle_context: object | None
-    span: object | None
+    uow: UnitOfWorkT
+    span: SpanT | None

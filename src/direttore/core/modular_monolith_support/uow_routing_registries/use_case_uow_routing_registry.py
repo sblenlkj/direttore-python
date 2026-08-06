@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from direttore.core.contracts.lifecycle import Lifecycle
 from direttore.core.modular_monolith_support.uow_routing_registries.base_uow_routing_registry import (
     BaseUowRoutingRegistry,
     UowRoutingRegistryItem,
@@ -18,7 +19,7 @@ class UseCaseUowRoutingRegistry(BaseUowRoutingRegistry):
     def from_registry(
         cls,
         *,
-        registry: UseCaseHandlerRegistry,
+        registry: UseCaseHandlerRegistry[Lifecycle[Any, Any]],
         root_uow_type: type[BaseUnitOfWork],
     ) -> UseCaseUowRoutingRegistry:
         routing_registry = cls()
@@ -34,7 +35,9 @@ class UseCaseUowRoutingRegistry(BaseUowRoutingRegistry):
     @classmethod
     def from_registry_items(
         cls,
-        items: Iterable[UowRoutingRegistryItem[UseCaseHandlerRegistry]],
+        items: Iterable[
+            UowRoutingRegistryItem[UseCaseHandlerRegistry[Lifecycle[Any, Any]]]
+        ],
     ) -> UseCaseUowRoutingRegistry:
         routing_registry = cls()
 

@@ -4,7 +4,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
 
-from direttore.core.contracts.messages import UseCaseCommand
+from direttore.core.contracts.messages import (
+    UseCaseCommand,
+    UseCaseCommandCompensation,
+)
 from direttore.core.primitives.event_queue import EventQueue
 from direttore.core.primitives.uow import BaseUnitOfWork
 from direttore.core.tracing import Span
@@ -13,6 +16,12 @@ from direttore.core.tracing import Span
 @dataclass(frozen=True, slots=True)
 class UseCaseHandlerResult:
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class SagaUseCaseHandlerResult:
+    result: UseCaseHandlerResult
+    compensation: UseCaseCommandCompensation
 
 
 @dataclass(slots=True)
@@ -48,5 +57,5 @@ class UseCaseHandler(ABC):
         self,
         command: UseCaseCommand,
         context: UseCaseHandlerContext[BaseUnitOfWork, object, Span],
-    ) -> UseCaseHandlerResult:
+    ) -> UseCaseHandlerResult | SagaUseCaseHandlerResult:
         raise NotImplementedError

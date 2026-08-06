@@ -4,23 +4,27 @@ from typing import ClassVar
 
 from direttore.application.modular_monolith import (
     ModularMonolithDirettoreApplication,
-    ModularMonolithDirettoreConfig,
     ModularMonolithDirettoreContext,
     ModularMonolithSlotConfig,
+    ModularMonolithSlotCreator,
+    ModularMonolithSlotCreatorConfig,
+    ModularMonolithUseCaseExecutionConfig,
 )
-from direttore.application.slot_provider import FactoryExecutionSlotProvider
-from direttore.core.contracts.handlers import QueryHandler, UseCaseHandler
-from direttore.core.contracts.messages import Query, UseCaseCommand
+from direttore.application.slot_provider import (
+    FactoryExecutionSlotProvider,
+    PoolExecutionSlotProvider,
+)
+from direttore.core.contracts.handlers import UseCaseHandler
+from direttore.core.contracts.lifecycle import Lifecycle as UseCaseLifecycle
+from direttore.core.contracts.messages import UseCaseCommand
+from direttore.core.contracts.operation_loader import KeyPayloadPair, OperationLoader
 from direttore.core.modular_monolith_support import (
     ModularMonolithExecutionDependencyRegistry,
     ModularUnitOfWorkCoordinator,
 )
-from direttore.core.modular_monolith_support.lifecycle import (
-    ModularQueryLifecycle,
-    ModularUseCaseLifecycle,
-)
-from direttore.core.primitives import BaseUnitOfWork, Container, ResourceHolder
-from direttore.core.registries import QueryHandlerRegistry, UseCaseHandlerRegistry
+from direttore.core.primitives import BaseUnitOfWork, Container
+from direttore.core.registries import UseCaseHandlerRegistry
+from tests.helpers import SessionResourceHolder
 
 
 @dataclass
@@ -33,11 +37,6 @@ class Outer(UseCaseCommand):
     value: int
 
 
-@dataclass
-class Read(Query):
-    value: int
-
-
 class Uow(BaseUnitOfWork):
     pass
 
@@ -45,17 +44,26 @@ class Uow(BaseUnitOfWork):
 class Coordinator(ModularUnitOfWorkCoordinator):
     def register(self):
         self.register_use_case_uow(Uow(self.resource_holder))
-        self.register_query_uow(Uow(self.resource_holder))
 
 
-class Lifecycle(ModularUseCaseLifecycle):
-    async def create_context(self, input, config, coordinator):
+class Lifecycle(UseCaseLifecycle):
+    inputs: ClassVar[list[object]] = []
+
+    async def create_context(self, input, config, resource, span):
+        assert isinstance(resource, SessionResourceHolder)
+        self.inputs.append(input)
         return {"request": input}
 
 
-class QueryLifecycle(ModularQueryLifecycle):
-    async def create_context(self, input, config, coordinator):
-        return {"request": input}
+class Loader(OperationLoader):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def get_key_payload_pair(self, operation_id, resource, span):
+        self.calls += 1
+        assert isinstance(resource, SessionResourceHolder)
+        await resource.get_session()
+        return KeyPayloadPair(key="inner", payload={"value": int(operation_id)})
 
 
 class RuntimeClient:
@@ -89,12 +97,6 @@ class OuterHandler(UseCaseHandler):
         return await self.client.invoke(Inner(command.value + 1))
 
 
-class ReadHandler(QueryHandler):
-    async def handle(self, query, context):
-        session = await context.uow.read_session()
-        return query.value + len(session.values)
-
-
 class Session:
     def __init__(self, log):
         self.log = log
@@ -112,11 +114,10 @@ class Session:
 
 def build(factory=False):
     log = []
-    use_cases = UseCaseHandlerRegistry(default_lifecycle=Lifecycle())
+    operation_loader = Loader()
+    use_cases = UseCaseHandlerRegistry[UseCaseLifecycle](default_lifecycle=Lifecycle())
     use_cases.register(Inner, InnerHandler, key="inner")
     use_cases.register(Outer, OuterHandler, key="outer")
-    queries = QueryHandlerRegistry(default_lifecycle=QueryLifecycle())
-    queries.register(Read, ReadHandler, key="read")
     dependencies = ModularMonolithExecutionDependencyRegistry()
     dependencies.register(
         dependency_type=RuntimeClient,
@@ -124,15 +125,10 @@ def build(factory=False):
     )
 
     def holder_factory():
-        return ResourceHolder({"primary": lambda: Session(log)})
+        return SessionResourceHolder({"primary": lambda: Session(log)})
 
-    provider_factory = (
-        (lambda slot_factory: FactoryExecutionSlotProvider(slot_factory=slot_factory))
-        if factory
-        else None
-    )
-    app = ModularMonolithDirettoreApplication(
-        config=ModularMonolithDirettoreConfig(
+    slot_creator = ModularMonolithSlotCreator(
+        config=ModularMonolithSlotCreatorConfig(
             slot=ModularMonolithSlotConfig(
                 resource_holder_factory=holder_factory,
                 coordinator_factory=lambda holder: Coordinator(resource_holder=holder),
@@ -141,18 +137,28 @@ def build(factory=False):
                 ModularMonolithDirettoreContext(
                     use_case_registry=use_cases,
                     use_case_root_uow_type=Uow,
-                    query_registry=queries,
-                    query_root_uow_type=Uow,
                 )
             ],
+            use_case_execution=ModularMonolithUseCaseExecutionConfig(
+                operation_loader=operation_loader,
+            ),
         ),
         container=Container(),
         execution_dependencies_registry=dependencies,
-        slot_provider_factory=provider_factory,
-        initial_slot_count=1,
-        max_slot_count=1,
     )
-    return app, log
+    slot_provider = (
+        FactoryExecutionSlotProvider(slot_creator=slot_creator)
+        if factory
+        else PoolExecutionSlotProvider(
+            slot_creator=slot_creator,
+            initial_slot_count=1,
+            max_slot_count=1,
+        )
+    )
+    app = ModularMonolithDirettoreApplication(
+        slot_provider=slot_provider,
+    )
+    return app, log, operation_loader
 
 
 def run(coro):
@@ -161,19 +167,18 @@ def run(coro):
 
 def test_modular_runtime_keeps_lifecycle_for_nested_invocation_and_clears_it():
     InnerHandler.contexts.clear()
-    app, log = build()
+    app, log, _ = build()
 
     async def scenario():
         assert await app.handle(Outer(4), input="request") == 5
-        assert await app.handle_query(Read(2), input="query") == 2
 
     run(scenario())
     assert InnerHandler.contexts == [{"request": "request"}]
-    assert log == ["commit", "close", "rollback", "close"]
+    assert log == ["commit", "close"]
 
 
 def test_modular_factory_provider_supports_explicit_transactional_island():
-    app, log = build(factory=True)
+    app, log, _ = build(factory=True)
 
     async def scenario():
         async with app.slot() as lease:
@@ -182,4 +187,47 @@ def test_modular_factory_provider_supports_explicit_transactional_island():
                 await lease.handle(Inner(2), input=None)
 
     run(scenario())
+    assert log == ["commit", "close"]
+
+
+def test_modular_lease_cache_reuses_first_lifecycle_context() -> None:
+    Lifecycle.inputs.clear()
+    InnerHandler.contexts.clear()
+    app, log, _ = build(factory=True)
+
+    async def scenario():
+        async with app.slot() as lease:
+            async with lease.transaction():
+                await lease.handle(Inner(1), input="first")
+                await lease.handle_by_key_cache("inner", {"value": 2})
+
+    run(scenario())
+    assert Lifecycle.inputs == ["first"]
+    assert InnerHandler.contexts == [
+        {"request": "first"},
+        {"request": "first"},
+    ]
+    assert log == ["commit", "close"]
+
+
+def test_modular_application_accepts_omitted_input() -> None:
+    Lifecycle.inputs.clear()
+    app, log, _ = build(factory=True)
+
+    async def scenario():
+        assert await app.handle(Inner(1)) == 1
+
+    run(scenario())
+    assert Lifecycle.inputs == [None]
+    assert log == ["commit", "close"]
+
+
+def test_modular_operation_loader_receives_resource_holder() -> None:
+    app, log, operation_loader = build(factory=True)
+
+    async def scenario():
+        assert await app.handle_operation("3") == 3
+
+    run(scenario())
+    assert operation_loader.calls == 1
     assert log == ["commit", "close"]

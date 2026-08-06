@@ -4,32 +4,22 @@ from collections.abc import Mapping
 from typing import Any
 
 from direttore.core.contracts.handlers import (
-    QueryHandler,
-    QueryHandlerContext,
-    QueryHandlerResult,
+    SagaUseCaseHandlerResult,
     UseCaseHandler,
     UseCaseHandlerContext,
     UseCaseHandlerResult,
 )
-from direttore.core.contracts.messages import Query, UseCaseCommand
+from direttore.core.contracts.lifecycle import Lifecycle
+from direttore.core.contracts.messages import UseCaseCommand
 from direttore.core.modular_monolith_support.coordinator import (
     ModularUnitOfWorkCoordinator,
-)
-from direttore.core.modular_monolith_support.uow_routing_registries.query_uow_routing_registry import (
-    QueryUowRoutingRegistry,
 )
 from direttore.core.modular_monolith_support.uow_routing_registries.use_case_uow_routing_registry import (
     UseCaseUowRoutingRegistry,
 )
 from direttore.core.primitives.event_queue import EventQueue
 from direttore.core.primitives.uow import BaseUnitOfWork
-from direttore.core.registries.registrations import (
-    QueryHandlerRegistration,
-    UseCaseHandlerRegistration,
-)
-from direttore.core.resolvers.query_handler_resolver import (
-    QueryHandlerResolver,
-)
+from direttore.core.registries.registrations import UseCaseHandlerRegistration
 from direttore.core.resolvers.resolved_handlers import ResolvedHandler
 from direttore.core.resolvers.use_case_handler_resolver import (
     UseCaseHandlerResolver,
@@ -44,8 +34,8 @@ class ModularMonolithExecutionRuntime:
     queue, and the lifecycle context installed by the active slot operation.
 
     Tracing state is never stored in the runtime. A caller may pass its current
-    span to invoke(...) or invoke_query(...). The runtime then creates a child
-    span representing the bounded-context invocation.
+    span to invoke(...). The runtime then creates a child span representing the
+    bounded-context invocation.
     """
 
     def __init__(
@@ -53,10 +43,8 @@ class ModularMonolithExecutionRuntime:
         *,
         coordinator: ModularUnitOfWorkCoordinator,
         event_queue: EventQueue,
-        use_case_resolver: UseCaseHandlerResolver,
+        use_case_resolver: UseCaseHandlerResolver[Lifecycle[Any, Any]],
         use_case_uow_routing: UseCaseUowRoutingRegistry,
-        query_resolver: QueryHandlerResolver | None = None,
-        query_uow_routing: QueryUowRoutingRegistry | None = None,
         dependency_overrides: Mapping[type[Any], Any] | None = None,
     ) -> None:
         self._coordinator = coordinator
@@ -64,9 +52,6 @@ class ModularMonolithExecutionRuntime:
 
         self._use_case_resolver = use_case_resolver
         self._use_case_uow_routing = use_case_uow_routing
-
-        self._query_resolver = query_resolver
-        self._query_uow_routing = query_uow_routing
 
         self._dependency_overrides = dependency_overrides
         self._lifecycle_context: object | None = None
@@ -93,7 +78,7 @@ class ModularMonolithExecutionRuntime:
         command: UseCaseCommand,
         *,
         span: Span | None = None,
-    ) -> UseCaseHandlerResult:
+    ) -> UseCaseHandlerResult | SagaUseCaseHandlerResult:
         resolved = self._use_case_resolver.resolve(
             type(command),
             overrides=self._dependency_overrides,
@@ -134,70 +119,17 @@ class ModularMonolithExecutionRuntime:
             child.add_event("runtime.invoke.finished")
             return result
 
-    async def invoke_query(
-        self,
-        query: Query,
-        *,
-        span: Span | None = None,
-    ) -> QueryHandlerResult:
-        query_resolver = self._require_query_resolver()
-        query_uow_routing = self._require_query_uow_routing()
-
-        resolved = query_resolver.resolve(
-            type(query),
-            overrides=self._dependency_overrides,
-        )
-
-        root_uow_type = query_uow_routing.get_uow_type_by_handler_type(
-            resolved.handler_type,
-        )
-        uow = self._coordinator.get_query_uow(root_uow_type)
-
-        if span is None:
-            return await self._invoke_query(
-                query=query,
-                resolved=resolved,
-                uow=uow,
-                span=None,
-            )
-
-        async with span.child(
-            name=self._build_span_name(
-                operation="runtime.invoke_query",
-                message=query,
-                source_name=resolved.registration.source_name,
-            ),
-            attributes=self._build_span_attributes(
-                message=query,
-                handler_type=resolved.handler_type,
-                source_name=resolved.registration.source_name,
-                key=resolved.registration.key,
-                message_kind="query",
-            ),
-        ) as child:
-            child.add_event("runtime.invoke_query.started")
-
-            result = await self._invoke_query(
-                query=query,
-                resolved=resolved,
-                uow=uow,
-                span=child,
-            )
-
-            child.add_event("runtime.invoke_query.finished")
-            return result
-
     async def _invoke(
         self,
         *,
         command: UseCaseCommand,
         resolved: ResolvedHandler[
             UseCaseHandler,
-            UseCaseHandlerRegistration,
+            UseCaseHandlerRegistration[Lifecycle[Any, Any]],
         ],
         uow: BaseUnitOfWork,
         span: Span | None,
-    ) -> UseCaseHandlerResult:
+    ) -> UseCaseHandlerResult | SagaUseCaseHandlerResult:
         context = UseCaseHandlerContext(
             uow=uow,
             queue=self._event_queue,
@@ -210,33 +142,11 @@ class ModularMonolithExecutionRuntime:
             context,
         )
 
-    async def _invoke_query(
-        self,
-        *,
-        query: Query,
-        resolved: ResolvedHandler[
-            QueryHandler,
-            QueryHandlerRegistration,
-        ],
-        uow: BaseUnitOfWork,
-        span: Span | None,
-    ) -> QueryHandlerResult:
-        context = QueryHandlerContext(
-            uow=uow,
-            lifecycle_context=self._lifecycle_context,
-            span=span,
-        )
-
-        return await resolved.handler.handle(
-            query,
-            context,
-        )
-
     def _get_use_case_uow(
         self,
         resolved: ResolvedHandler[
             UseCaseHandler,
-            UseCaseHandlerRegistration,
+            UseCaseHandlerRegistration[Lifecycle[Any, Any]],
         ],
     ) -> BaseUnitOfWork:
         root_uow_type = self._use_case_uow_routing.get_uow_type_by_handler_type(
@@ -245,29 +155,11 @@ class ModularMonolithExecutionRuntime:
 
         return self._coordinator.get_use_case_uow(root_uow_type)
 
-    def _require_query_resolver(self) -> QueryHandlerResolver:
-        if self._query_resolver is None:
-            raise RuntimeError(
-                "Modular query execution is not configured. "
-                "runtime.invoke_query(...) requires query resolver."
-            )
-
-        return self._query_resolver
-
-    def _require_query_uow_routing(self) -> QueryUowRoutingRegistry:
-        if self._query_uow_routing is None:
-            raise RuntimeError(
-                "Modular query UoW routing is not configured. "
-                "runtime.invoke_query(...) requires query UoW routing registry."
-            )
-
-        return self._query_uow_routing
-
     def _build_span_name(
         self,
         *,
         operation: str,
-        message: UseCaseCommand | Query,
+        message: UseCaseCommand,
         source_name: str | None,
     ) -> str:
         message_name = f"{type(message).__module__}.{type(message).__qualname__}"
@@ -280,7 +172,7 @@ class ModularMonolithExecutionRuntime:
     def _build_span_attributes(
         self,
         *,
-        message: UseCaseCommand | Query,
+        message: UseCaseCommand,
         handler_type: type[Any],
         source_name: str | None,
         key: str | None,

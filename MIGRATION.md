@@ -23,6 +23,11 @@ SimpleServiceSlotConfig(
 )
 ```
 
+`ResourceHolder` is now abstract. Implement `commit`, `rollback`, and `close`
+in the application infrastructure holder. Use `_mark_finalized()` after commit
+or rollback. `close()` only closes infrastructure resources; the execution slot
+calls the public `reset()` method afterward.
+
 Use `await uow.read_session(name)` and `await uow.write_session(name)` to record
 intent on the same cached named session.
 
@@ -34,7 +39,6 @@ Construct coordinators with one holder:
 class Coordinator(ModularUnitOfWorkCoordinator):
     def register(self) -> None:
         self.register_use_case_uow(OrdersUow(self.resource_holder))
-        self.register_query_uow(OrdersReadUow(self.resource_holder))
 
 coordinator = Coordinator(resource_holder=holder)
 ```
@@ -53,21 +57,45 @@ async with director.slot() as lease:
 
 Do not run `asyncio.gather` with one lease.
 
-## Provider selection
-
-The default pooled behavior requires no change. Select per-acquisition slots:
+If a sequential transactional island should reuse the first operation's
+lifecycle context and span, use the cache forms:
 
 ```python
-slot_provider_factory=lambda factory: FactoryExecutionSlotProvider(
-    slot_factory=factory
-)
+async with director.slot() as lease:
+    async with lease.transaction():
+        await lease.handle(first, input=context, trace=trace)
+        await lease.handle_by_key_cache(key, payload)
 ```
+
+The lease API has six use-case methods: the three normal forms and the three
+`*_cache` forms. None commits between calls.
+
+## Provider selection
+
+Slot construction is now explicit and lives outside the application facade.
+Create the service-specific creator, choose a provider, and inject the provider:
+
+```python
+slot_creator = SimpleServiceSlotCreator(config=config, container=container)
+slot_provider = FactoryExecutionSlotProvider(
+    slot_creator=slot_creator
+)
+director = SimpleServiceDirettoreApplication(slot_provider=slot_provider)
+```
+
+Choose the application facade and slot creator for the execution model, inject
+the creator into a provider, and pass that provider to the application. The
+simple-service and modular-monolith facades share the same transaction pattern
+but preserve their concrete slot types.
 
 ## Saga metadata
 
 Compensable registrations now provide both `saga_key` and
-`compensation_type`. Return `SagaHandlerResult`; implement an idempotent
-`compensate` method and payload round-trip on the compensation type.
+`compensation_type`. Use `UseCaseCommandCompensation` for use-case handlers and
+`EventCompensation` for event handlers. Return `SagaUseCaseHandlerResult` from
+compensable use cases or `SagaEventHandlerResult` from compensable event
+handlers; implement an idempotent `compensate` method and payload round-trip on
+the compensation type.
 
 ## Removed public abstractions
 
@@ -77,5 +105,5 @@ Compensable registrations now provide both `saga_key` and
 - `ExecutionSlotPool` as an application-facing acquisition mechanism
 - query-specific holder/UoW factories in application configuration
 
-Query messages, handlers, registries, resolvers, and application entry points
-remain supported.
+The query API was removed from both core and application. Remove query message,
+handler, lifecycle, registry, resolver, routing, and runtime usage from clients.

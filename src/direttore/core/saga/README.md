@@ -7,24 +7,28 @@ idempotent compensation in reverse order.
 
 - `SagaEntry`: handler kind, stable handler key, serialized payload.
 - `SagaRecord`: saga ID and immutable tuple of entries.
-- `SagaHandlerResult`: business result plus compensation object.
-- `SagaCompensationContext`: saga ID, UoW, lifecycle context, and span.
+- `SagaUseCaseHandlerResult`: use-case result plus command compensation.
+- `SagaEventHandlerResult`: event compensation without a business result.
+- `SagaCompensationContext[UnitOfWorkT, SpanT]`: saga ID plus the routed,
+  application-typed UoW and span. Applications normally publish a
+  context-specific alias from their `application/architecture.py` module.
 
 The saga ID belongs to a normal call or lease. It is not duplicated in every
-entry. Queries do not create saga entries.
+entry.
 
 ## Save ordering
 
 Entries accumulate in the unified holder. Lease commit performs:
 
 ```text
-journal.save(payload-based SagaRecord)
+journal.save(payload-based SagaRecord, resource, span)
 resource-holder commit
 clear in-memory entries
 ```
 
-The in-memory journal deep-copies payloads on save and load to exercise the
-same serialization boundary expected from Redis or SQL implementations.
+Journal save and load receive the active `Span | None`. The in-memory journal
+deep-copies payloads on both operations to exercise the same serialization
+boundary expected from Redis or SQL implementations.
 
 SQL journal persistence can be atomic with business state only when the journal
 uses the same session. In-memory/Redis persistence is not atomic with SQL.

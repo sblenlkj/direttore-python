@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from typing import Any
-
-from direttore.core.contracts.handlers import EventHandlerContext
+from direttore.core.contracts.handlers import (
+    EventHandlerContext,
+    SagaEventHandlerResult,
+)
 from direttore.core.contracts.messages import Event
 from direttore.core.event_dispatchers.base_event_dispatcher import (
     BaseEventDispatcher,
 )
 from direttore.core.primitives.uow import BaseUnitOfWork
+from direttore.core.registries.registrations import EventHandlerRegistration
 from direttore.core.resolvers.event_handler_resolver import (
     EventHandlerResolver,
 )
@@ -31,9 +33,11 @@ class SimpleServiceEventDispatcher(BaseEventDispatcher):
         event: Event,
         uow: BaseUnitOfWork,
         span: Span | None = None,
-    ) -> list[tuple[Any, object]]:
+    ) -> list[tuple[SagaEventHandlerResult | None, EventHandlerRegistration]]:
         resolved_handlers = self.resolver.resolve(type(event))
-        results: list[tuple[Any, object]] = []
+        results: list[
+            tuple[SagaEventHandlerResult | None, EventHandlerRegistration]
+        ] = []
 
         for resolved in resolved_handlers:
             if span is None:

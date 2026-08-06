@@ -25,9 +25,13 @@ class UseCaseCommand(ExecutionMessage):
     pass
 
 
-class Query(ExecutionMessage):
+class UseCaseCommandCompensation(Message):
     pass
 
 
 class Event(Message):
+    pass
+
+
+class EventCompensation(Message):
     pass

@@ -1,20 +1,17 @@
 # Slot-owned tracing
 
-Applications optionally configure a `SpanFactory`. A physical slot opens one
-root span for a lease and creates a child for each command, query, event, or
-compensation operation.
+Applications optionally configure a `SpanFactory`. A plain slot creates one
+span for its operation. A lease stores its current operation span in
+`SlotExecutionCache`.
 
 ```text
-slot lease
-├── command A
-│   └── event handler
-├── query B
-└── compensation C
+command A span --closed/replaced--> command B span
+                                      `-- reused by cache calls
 ```
 
-The root stays open through saga persistence, resource finalization,
-after-transaction events, cleanup, and release. The first operation's trace
-input initializes the lease trace; later operations create children without a
+Starting a normal lease operation closes the previous cached span and creates a
+new one from that operation's trace input. Cache calls reuse the stored span.
+Release closes the final cached span. There is no separate lease-root span or
 global current-span mechanism.
 
 Modular runtime invocation receives its parent `Span` explicitly and creates a

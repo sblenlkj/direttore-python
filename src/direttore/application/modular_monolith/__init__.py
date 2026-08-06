@@ -1,8 +1,7 @@
 from direttore.application.modular_monolith.config import (
-    ModularMonolithDirettoreConfig,
     ModularMonolithDirettoreContext,
-    ModularMonolithQueryExecutionConfig,
     ModularMonolithSlotConfig,
+    ModularMonolithSlotCreatorConfig,
     ModularMonolithUseCaseExecutionConfig,
 )
 from direttore.application.modular_monolith.direttore_application import (
@@ -11,13 +10,16 @@ from direttore.application.modular_monolith.direttore_application import (
 from direttore.application.modular_monolith.execution_slot import (
     ModularMonolithExecutionSlot,
 )
+from direttore.application.modular_monolith.slot_creator import (
+    ModularMonolithSlotCreator,
+)
 
 __all__ = [
     "ModularMonolithDirettoreApplication",
-    "ModularMonolithDirettoreConfig",
+    "ModularMonolithSlotCreatorConfig",
     "ModularMonolithDirettoreContext",
     "ModularMonolithExecutionSlot",
-    "ModularMonolithQueryExecutionConfig",
     "ModularMonolithSlotConfig",
+    "ModularMonolithSlotCreator",
     "ModularMonolithUseCaseExecutionConfig",
 ]

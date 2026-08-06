@@ -1,20 +1,20 @@
 from direttore.application.base_execution_slot import BaseExecutionSlot
 from direttore.application.modular_monolith import (
     ModularMonolithDirettoreApplication,
-    ModularMonolithDirettoreConfig,
     ModularMonolithDirettoreContext,
     ModularMonolithExecutionSlot,
-    ModularMonolithQueryExecutionConfig,
     ModularMonolithSlotConfig,
+    ModularMonolithSlotCreator,
+    ModularMonolithSlotCreatorConfig,
     ModularMonolithUseCaseExecutionConfig,
 )
 from direttore.application.simple_service import (
     SimpleServiceDirettoreApplication,
-    SimpleServiceDirettoreConfig,
     SimpleServiceExecutionSlot,
     SimpleServiceHandlerConfig,
-    SimpleServiceQueryExecutionConfig,
     SimpleServiceSlotConfig,
+    SimpleServiceSlotCreator,
+    SimpleServiceSlotCreatorConfig,
     SimpleServiceUseCaseExecutionConfig,
 )
 from direttore.application.slot_lease import (
@@ -30,6 +30,7 @@ from direttore.application.slot_provider import (
     ExecutionSlotProviderStats,
     FactoryExecutionSlotProvider,
     PoolExecutionSlotProvider,
+    SlotCreator,
 )
 
 __all__ = [
@@ -39,21 +40,22 @@ __all__ = [
     "ExecutionSlotProviderStats",
     "FactoryExecutionSlotProvider",
     "ModularMonolithDirettoreApplication",
-    "ModularMonolithDirettoreConfig",
+    "ModularMonolithSlotCreatorConfig",
     "ModularMonolithDirettoreContext",
     "ModularMonolithExecutionSlot",
-    "ModularMonolithQueryExecutionConfig",
     "ModularMonolithSlotConfig",
+    "ModularMonolithSlotCreator",
     "ModularMonolithUseCaseExecutionConfig",
     "PoolExecutionSlotProvider",
     "SimpleServiceDirettoreApplication",
-    "SimpleServiceDirettoreConfig",
+    "SimpleServiceSlotCreatorConfig",
     "SimpleServiceExecutionSlot",
     "SimpleServiceHandlerConfig",
-    "SimpleServiceQueryExecutionConfig",
     "SimpleServiceSlotConfig",
+    "SimpleServiceSlotCreator",
     "SimpleServiceUseCaseExecutionConfig",
     "SlotLease",
+    "SlotCreator",
     "SlotLeaseError",
     "SlotLeaseState",
     "SlotLeaseStateError",

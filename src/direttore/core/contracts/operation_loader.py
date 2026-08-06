@@ -5,10 +5,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from direttore.core.modular_monolith_support.coordinator import (
-    ModularUnitOfWorkCoordinator,
-)
-from direttore.core.primitives.uow import BaseUnitOfWork
+from direttore.core.primitives.resource_holder import ResourceHolder
+from direttore.core.tracing import Span
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,19 +15,12 @@ class KeyPayloadPair:
     payload: Mapping[str, Any]
 
 
-class SimpleServiceOperationLoader(ABC):
-    @abstractmethod
-    async def get_key_payload_pair(
-        self, operation_id: int | str, uow: BaseUnitOfWork
-    ) -> KeyPayloadPair:
-        raise NotImplementedError
-
-
-class ModularMonolithOperationLoader(ABC):
+class OperationLoader(ABC):
     @abstractmethod
     async def get_key_payload_pair(
         self,
         operation_id: int | str,
-        coordinator: ModularUnitOfWorkCoordinator,
+        resource: ResourceHolder,
+        span: Span | None,
     ) -> KeyPayloadPair:
         raise NotImplementedError

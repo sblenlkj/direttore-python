@@ -1,14 +1,10 @@
 from direttore.core.contracts.handlers.event_handler import (
     EventHandler,
     EventHandlerContext,
-)
-from direttore.core.contracts.handlers.query_handler import (
-    QueryHandler,
-    QueryHandlerConfig,
-    QueryHandlerContext,
-    QueryHandlerResult,
+    SagaEventHandlerResult,
 )
 from direttore.core.contracts.handlers.use_case_handler import (
+    SagaUseCaseHandlerResult,
     UseCaseEventDrainingMode,
     UseCaseHandler,
     UseCaseHandlerConfig,
@@ -20,10 +16,8 @@ from direttore.core.contracts.handlers.use_case_handler import (
 __all__ = [
     "EventHandler",
     "EventHandlerContext",
-    "QueryHandler",
-    "QueryHandlerConfig",
-    "QueryHandlerContext",
-    "QueryHandlerResult",
+    "SagaEventHandlerResult",
+    "SagaUseCaseHandlerResult",
     "UseCaseHandler",
     "UseCaseHandlerConfig",
     "UseCaseHandlerContext",

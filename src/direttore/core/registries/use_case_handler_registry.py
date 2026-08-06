@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import Self
+from typing import Any, Self
 
 from direttore.core.contracts.handlers import (
     UseCaseEventDrainingMode,
@@ -9,11 +9,11 @@ from direttore.core.contracts.handlers import (
     UseCaseHandlerConfig,
     UseCaseHandlerExecutionMode,
 )
-from direttore.core.contracts.lifecycle import (
-    DefaultUseCaseLifecycle,
-    UseCaseLifecycle,
+from direttore.core.contracts.lifecycle import Lifecycle
+from direttore.core.contracts.messages import (
+    UseCaseCommand,
+    UseCaseCommandCompensation,
 )
-from direttore.core.contracts.messages import UseCaseCommand
 from direttore.core.registries.errors import (
     HandlerAlreadyRegisteredError,
     HandlerKeyAlreadyRegisteredError,
@@ -22,40 +22,34 @@ from direttore.core.registries.errors import (
     InvalidHandlerTypeError,
     InvalidMessageTypeError,
 )
-from direttore.core.registries.registrations import (
-    UseCaseHandlerRegistration,
-)
+from direttore.core.registries.registrations import UseCaseHandlerRegistration
 
 
-class UseCaseHandlerRegistry:
+class UseCaseHandlerRegistry[LifecycleT: Lifecycle[Any, Any]]:
     def __init__(
         self,
         source_name: str | None = None,
         *,
-        default_lifecycle: UseCaseLifecycle | None = None,
+        default_lifecycle: LifecycleT | None = None,
         default_config: UseCaseHandlerConfig | None = None,
     ) -> None:
         self.source_name = source_name
-        self.default_lifecycle = (
-            default_lifecycle
-            if default_lifecycle is not None
-            else DefaultUseCaseLifecycle()
-        )
+        self.default_lifecycle = default_lifecycle
         self.default_config = (
             default_config if default_config is not None else UseCaseHandlerConfig()
         )
 
         self._registrations_by_command_type: dict[
             type[UseCaseCommand],
-            UseCaseHandlerRegistration,
+            UseCaseHandlerRegistration[LifecycleT],
         ] = {}
         self._registrations_by_key: dict[
             str,
-            UseCaseHandlerRegistration,
+            UseCaseHandlerRegistration[LifecycleT],
         ] = {}
         self._registrations_by_saga_key: dict[
             str,
-            UseCaseHandlerRegistration,
+            UseCaseHandlerRegistration[LifecycleT],
         ] = {}
 
     def register(
@@ -65,9 +59,9 @@ class UseCaseHandlerRegistry:
         *,
         key: str | None = None,
         saga_key: str | None = None,
-        compensation_type: type[object] | None = None,
+        compensation_type: type[UseCaseCommandCompensation] | None = None,
         config: UseCaseHandlerConfig | None = None,
-        lifecycle: UseCaseLifecycle | None = None,
+        lifecycle: LifecycleT | None = None,
         execution_mode: UseCaseHandlerExecutionMode = (
             UseCaseHandlerExecutionMode.IN_TRANSACTION
         ),
@@ -100,9 +94,9 @@ class UseCaseHandlerRegistry:
         *,
         key: str | None = None,
         saga_key: str | None = None,
-        compensation_type: type[object] | None = None,
+        compensation_type: type[UseCaseCommandCompensation] | None = None,
         config: UseCaseHandlerConfig | None = None,
-        lifecycle: UseCaseLifecycle | None = None,
+        lifecycle: LifecycleT | None = None,
         execution_mode: UseCaseHandlerExecutionMode = (
             UseCaseHandlerExecutionMode.IN_TRANSACTION
         ),
@@ -150,7 +144,7 @@ class UseCaseHandlerRegistry:
     def get_registration(
         self,
         command_type: type[UseCaseCommand],
-    ) -> UseCaseHandlerRegistration:
+    ) -> UseCaseHandlerRegistration[LifecycleT]:
         registration = self._registrations_by_command_type.get(command_type)
 
         if registration is None:
@@ -164,7 +158,7 @@ class UseCaseHandlerRegistry:
     def get_registration_by_key(
         self,
         key: str,
-    ) -> UseCaseHandlerRegistration:
+    ) -> UseCaseHandlerRegistration[LifecycleT]:
         registration = self._registrations_by_key.get(key)
 
         if registration is None:
@@ -177,7 +171,7 @@ class UseCaseHandlerRegistry:
     def get_registration_by_saga_key(
         self,
         saga_key: str,
-    ) -> UseCaseHandlerRegistration:
+    ) -> UseCaseHandlerRegistration[LifecycleT]:
         registration = self._registrations_by_saga_key.get(saga_key)
 
         if registration is None:
@@ -214,7 +208,7 @@ class UseCaseHandlerRegistry:
     def get_lifecycle(
         self,
         command_type: type[UseCaseCommand],
-    ) -> UseCaseLifecycle:
+    ) -> LifecycleT | None:
         return self.get_registration(command_type).lifecycle
 
     def get_execution_mode(
@@ -225,12 +219,12 @@ class UseCaseHandlerRegistry:
 
     def iter_registrations(
         self,
-    ) -> Iterable[UseCaseHandlerRegistration]:
+    ) -> Iterable[UseCaseHandlerRegistration[LifecycleT]]:
         return self._registrations_by_command_type.values()
 
     def _add_registration(
         self,
-        registration: UseCaseHandlerRegistration,
+        registration: UseCaseHandlerRegistration[LifecycleT],
     ) -> None:
         command_type = registration.command_type
         key = registration.key
@@ -266,7 +260,7 @@ class UseCaseHandlerRegistry:
         registries: Iterable[Self],
         *,
         source_name: str | None = None,
-        default_lifecycle: UseCaseLifecycle | None = None,
+        default_lifecycle: LifecycleT | None = None,
         default_config: UseCaseHandlerConfig | None = None,
     ) -> Self:
         merged = cls(
@@ -308,9 +302,15 @@ class UseCaseHandlerRegistry:
     @staticmethod
     def _validate_saga_metadata(
         saga_key: str | None,
-        compensation_type: type[object] | None,
+        compensation_type: type[UseCaseCommandCompensation] | None,
     ) -> None:
         if (saga_key is None) != (compensation_type is None):
             raise ValueError(
                 "saga_key and compensation_type must be provided together."
+            )
+        if compensation_type is not None and not issubclass(
+            compensation_type, UseCaseCommandCompensation
+        ):
+            raise InvalidMessageTypeError(
+                "Use-case compensation type must inherit UseCaseCommandCompensation."
             )

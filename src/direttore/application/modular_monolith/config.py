@@ -2,17 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
-from direttore.core.contracts.operation_loader import (
-    ModularMonolithOperationLoader,
-)
+from direttore.core.contracts.lifecycle import Lifecycle
+from direttore.core.contracts.operation_loader import OperationLoader
 from direttore.core.modular_monolith_support.coordinator import (
     ModularUnitOfWorkCoordinator,
 )
 from direttore.core.primitives.resource_holder import ResourceHolder
 from direttore.core.primitives.uow import BaseUnitOfWork
 from direttore.core.registries.event_handler_registry import EventHandlerRegistry
-from direttore.core.registries.query_handler_registry import QueryHandlerRegistry
 from direttore.core.registries.use_case_handler_registry import (
     UseCaseHandlerRegistry,
 )
@@ -27,30 +26,19 @@ type ModularUnitOfWorkCoordinatorFactory = Callable[
 
 @dataclass(frozen=True, slots=True)
 class ModularMonolithUseCaseExecutionConfig:
-    operation_loader: ModularMonolithOperationLoader | None = None
+    operation_loader: OperationLoader | None = None
     max_processed_events: int = 100
 
 
 @dataclass(frozen=True, slots=True)
-class ModularMonolithQueryExecutionConfig:
-    operation_loader: ModularMonolithOperationLoader | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ModularMonolithDirettoreContext:
-    use_case_registry: UseCaseHandlerRegistry
+class ModularMonolithDirettoreContext[InputT]:
+    use_case_registry: UseCaseHandlerRegistry[Lifecycle[InputT | None, Any]]
     use_case_root_uow_type: type[BaseUnitOfWork]
-    query_registry: QueryHandlerRegistry | None = None
-    query_root_uow_type: type[BaseUnitOfWork] | None = None
     event_registry: EventHandlerRegistry | None = None
 
     def __post_init__(self) -> None:
         if not issubclass(self.use_case_root_uow_type, BaseUnitOfWork):
             raise TypeError("use_case_root_uow_type must be a BaseUnitOfWork.")
-        if (self.query_registry is None) != (self.query_root_uow_type is None):
-            raise ValueError(
-                "query_registry and query_root_uow_type must be configured together."
-            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,16 +48,13 @@ class ModularMonolithSlotConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class ModularMonolithDirettoreConfig:
+class ModularMonolithSlotCreatorConfig[InputT, TraceT]:
     slot: ModularMonolithSlotConfig
-    contexts: list[ModularMonolithDirettoreContext]
-    span_factory: SpanFactory[object] | None = None
+    contexts: list[ModularMonolithDirettoreContext[InputT]]
+    span_factory: SpanFactory[TraceT] | None = None
     saga_journal: SagaJournal | None = None
     use_case_execution: ModularMonolithUseCaseExecutionConfig = field(
         default_factory=ModularMonolithUseCaseExecutionConfig,
-    )
-    query_execution: ModularMonolithQueryExecutionConfig = field(
-        default_factory=ModularMonolithQueryExecutionConfig,
     )
 
     def __post_init__(self) -> None:

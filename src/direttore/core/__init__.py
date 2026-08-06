@@ -1,10 +1,8 @@
 from direttore.core.contracts.handlers import (
     EventHandler,
     EventHandlerContext,
-    QueryHandler,
-    QueryHandlerConfig,
-    QueryHandlerContext,
-    QueryHandlerResult,
+    SagaEventHandlerResult,
+    SagaUseCaseHandlerResult,
     UseCaseEventDrainingMode,
     UseCaseHandler,
     UseCaseHandlerConfig,
@@ -12,21 +10,23 @@ from direttore.core.contracts.handlers import (
     UseCaseHandlerExecutionMode,
     UseCaseHandlerResult,
 )
-from direttore.core.contracts.messages import Event, Query, UseCaseCommand
+from direttore.core.contracts.messages import (
+    Event,
+    EventCompensation,
+    UseCaseCommand,
+    UseCaseCommandCompensation,
+)
 from direttore.core.contracts.operation_loader import (
     KeyPayloadPair,
-    ModularMonolithOperationLoader,
-    SimpleServiceOperationLoader,
+    OperationLoader,
 )
 from direttore.core.primitives import (
     BaseUnitOfWork,
     Container,
-    MultiResourceCommitError,
     ResourceHolder,
 )
 from direttore.core.registries import (
     EventHandlerRegistry,
-    QueryHandlerRegistry,
     UseCaseHandlerRegistry,
 )
 from direttore.core.saga import (
@@ -34,7 +34,6 @@ from direttore.core.saga import (
     SagaCompensationContext,
     SagaEntry,
     SagaHandlerKind,
-    SagaHandlerResult,
     SagaJournal,
     SagaRecord,
 )
@@ -43,28 +42,23 @@ __all__ = [
     "BaseUnitOfWork",
     "Container",
     "Event",
+    "EventCompensation",
     "EventHandler",
     "EventHandlerContext",
     "EventHandlerRegistry",
     "InMemorySagaJournal",
     "KeyPayloadPair",
-    "ModularMonolithOperationLoader",
-    "MultiResourceCommitError",
-    "Query",
-    "QueryHandler",
-    "QueryHandlerConfig",
-    "QueryHandlerContext",
-    "QueryHandlerRegistry",
-    "QueryHandlerResult",
+    "OperationLoader",
     "ResourceHolder",
     "SagaCompensationContext",
     "SagaEntry",
     "SagaHandlerKind",
-    "SagaHandlerResult",
+    "SagaEventHandlerResult",
     "SagaJournal",
     "SagaRecord",
-    "SimpleServiceOperationLoader",
+    "SagaUseCaseHandlerResult",
     "UseCaseCommand",
+    "UseCaseCommandCompensation",
     "UseCaseEventDrainingMode",
     "UseCaseHandler",
     "UseCaseHandlerConfig",
