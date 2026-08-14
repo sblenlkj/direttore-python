@@ -11,8 +11,17 @@ from direttore.core.tracing.tracer import Span, SpanFactory
 
 
 @dataclass(slots=True)
+class SpanEvent:
+    name: str
+    attributes: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class SpanNode:
     name: str
+    trace: object | None = None
+    attributes: dict[str, Any] = field(default_factory=dict)
+    events: list[SpanEvent] = field(default_factory=list)
     children: list[SpanNode] = field(default_factory=list)
     started_at: float | None = None
     finished_at: float | None = None
@@ -58,6 +67,7 @@ class RecordingSpan(Span):
 
         child_node = SpanNode(
             name=name,
+            attributes=dict(attributes or {}),
         )
         self._node.children.append(child_node)
 
@@ -103,6 +113,7 @@ class RecordingSpan(Span):
         value: Any,
     ) -> None:
         self._ensure_active()
+        self._node.attributes[key] = value
 
     def add_event(
         self,
@@ -110,6 +121,12 @@ class RecordingSpan(Span):
         attributes: Mapping[str, Any] | None = None,
     ) -> None:
         self._ensure_active()
+        self._node.events.append(
+            SpanEvent(
+                name=name,
+                attributes=dict(attributes or {}),
+            )
+        )
 
     def _ensure_active(self) -> None:
         if not self._entered:
@@ -126,6 +143,14 @@ class RecordingSpanFactory[TraceT](SpanFactory[TraceT]):
     )
     level: int = logging.DEBUG
     log_on_exit: bool = True
+    completed_traces: list[SpanNode] = field(
+        default_factory=list,
+        compare=False,
+    )
+    on_trace_complete: Callable[[SpanNode], None] | None = field(
+        default=None,
+        compare=False,
+    )
 
     def create_span(
         self,
@@ -136,28 +161,36 @@ class RecordingSpanFactory[TraceT](SpanFactory[TraceT]):
     ) -> Span:
         root = SpanNode(
             name=name,
+            trace=trace,
+            attributes=dict(attributes or {}),
         )
 
-        def log_trace() -> None:
-            if not self.log_on_exit:
-                return
+        def complete_trace() -> None:
+            self.completed_traces.append(root)
 
-            self.logger.log(
-                self.level,
-                "%s",
-                render_trace(root),
-            )
+            if self.on_trace_complete is not None:
+                self.on_trace_complete(root)
+
+            if self.log_on_exit:
+                self.logger.log(
+                    self.level,
+                    "%s",
+                    render_trace(root),
+                )
 
         return RecordingSpan(
             node=root,
-            on_root_exit=log_trace,
+            on_root_exit=complete_trace,
         )
 
 
 def render_trace(
     root: SpanNode,
 ) -> str:
-    lines = [(f"Trace [{root.status}] {_format_duration(root.duration_ms)}")]
+    header = f"Trace [{root.status}] {_format_duration(root.duration_ms)}"
+    if root.trace is not None:
+        header = f"{header} trace={root.trace!r}"
+    lines = [header]
 
     _render_node(
         node=root,
@@ -185,9 +218,19 @@ def _render_node(
     if node.error is not None:
         line = f"{line} error={node.error}"
 
+    if node.attributes:
+        line = f"{line} attributes={node.attributes!r}"
+
     lines.append(line)
 
     child_prefix = f"{prefix}{'    ' if connector == '└──' else '│   '}"
+
+    for event in node.events:
+        event_line = f"{child_prefix}• {event.name}"
+        if event.attributes:
+            event_line = f"{event_line} attributes={event.attributes!r}"
+        lines.append(event_line)
+
     last_index = len(node.children) - 1
 
     for index, child in enumerate(node.children):

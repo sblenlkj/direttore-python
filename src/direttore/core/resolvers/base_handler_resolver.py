@@ -15,6 +15,10 @@ from direttore.core.resolvers.errors import (
 from direttore.core.resolvers.resolved_handlers import (
     ResolvedHandler,
 )
+from direttore.core.resolvers.validation_report import (
+    DependencyResolutionDescription,
+    HandlerResolutionDescription,
+)
 
 
 class BaseHandlerResolver[RegistrationT, HandlerT](ABC):
@@ -35,9 +39,15 @@ class BaseHandlerResolver[RegistrationT, HandlerT](ABC):
         container: Container,
         *,
         execution_dependency_types: Iterable[type[Any]] = (),
+        execution_dependency_implementations: Mapping[
+            type[Any], type[Any] | None
+        ] | None = None,
     ) -> None:
         self.container = container
         self.execution_dependency_types = frozenset(execution_dependency_types)
+        self.execution_dependency_implementations = dict(
+            execution_dependency_implementations or {}
+        )
         self._handler_cache: dict[type[Any], Any] = {}
 
     def warm_up_cache(
@@ -84,6 +94,38 @@ class BaseHandlerResolver[RegistrationT, HandlerT](ABC):
         joined_errors = "\n".join(f"- {error}" for error in validation_errors)
 
         raise HandlerValidationError(f"Handler validation failed:\n{joined_errors}")
+
+    def describe_handler_resolutions(
+        self,
+        registrations: Iterable[RegistrationT],
+        *,
+        handler_kind: str,
+    ) -> list[HandlerResolutionDescription]:
+        descriptions: list[HandlerResolutionDescription] = []
+
+        for registration in registrations:
+            handler_type = self._get_handler_type(registration)
+            dependencies = tuple(
+                self._describe_parameter_resolution(
+                    handler_type=handler_type,
+                    parameter=parameter,
+                )
+                for parameter in self._iter_constructor_parameters(handler_type)
+            )
+            source_name = getattr(registration, "source_name", None)
+            descriptions.append(
+                HandlerResolutionDescription(
+                    context_name=source_name or "<unnamed>",
+                    handler_kind=handler_kind,
+                    handler_name=self._qualified_name(handler_type),
+                    is_cached=not self._uses_execution_dependencies(handler_type),
+                    key=getattr(registration, "key", None),
+                    saga_key=getattr(registration, "saga_key", None),
+                    dependencies=dependencies,
+                )
+            )
+
+        return descriptions
 
     def resolve_registration(
         self,
@@ -182,6 +224,49 @@ class BaseHandlerResolver[RegistrationT, HandlerT](ABC):
 
         return handler_type(**kwargs)
 
+    def _describe_parameter_resolution(
+        self,
+        *,
+        handler_type: type[Any],
+        parameter: inspect.Parameter,
+    ) -> DependencyResolutionDescription:
+        dependency_type = self._get_parameter_dependency_type(
+            handler_type=handler_type,
+            parameter=parameter,
+        )
+
+        if self._is_execution_dependency_type(dependency_type):
+            implementation_type = self.execution_dependency_implementations.get(
+                dependency_type
+            )
+            implementation_name = (
+                self._qualified_name(implementation_type)
+                if implementation_type is not None
+                else "<execution dependency factory result>"
+            )
+            return DependencyResolutionDescription(
+                parameter_name=parameter.name,
+                dependency_name=self._qualified_name(dependency_type),
+                source="execution override",
+                implementation_name=implementation_name,
+            )
+
+        if self.container.has(dependency_type):
+            implementation = self.container.get(dependency_type)
+            return DependencyResolutionDescription(
+                parameter_name=parameter.name,
+                dependency_name=self._qualified_name(dependency_type),
+                source="container",
+                implementation_name=self._qualified_name(type(implementation)),
+            )
+
+        return DependencyResolutionDescription(
+            parameter_name=parameter.name,
+            dependency_name=self._qualified_name(dependency_type),
+            source="constructor default",
+            implementation_name=repr(parameter.default),
+        )
+
     def _iter_constructor_parameters(
         self,
         handler_type: type[Any],
@@ -273,6 +358,10 @@ class BaseHandlerResolver[RegistrationT, HandlerT](ABC):
         dependency_type: type[Any],
     ) -> bool:
         return dependency_type in self.execution_dependency_types
+
+    @staticmethod
+    def _qualified_name(value_type: type[Any]) -> str:
+        return f"{value_type.__module__}.{value_type.__qualname__}"
 
     @abstractmethod
     def _get_handler_type(

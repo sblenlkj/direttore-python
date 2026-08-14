@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from os import PathLike
 from typing import Any
 
 from direttore.application.base_execution_slot import BaseExecutionSlot
@@ -22,7 +23,10 @@ class SlotCreator[SlotT: BaseExecutionSlot[Any, Any], InputT, TraceT](ABC):
     def create_slot(self) -> SlotT:
         raise NotImplementedError
 
-    def validate(self) -> None:
+    def validate(
+        self,
+        validation_results_path: str | PathLike[str] | None = None,
+    ) -> None:
         """Validate dependencies shared by every slot created by this object."""
 
 

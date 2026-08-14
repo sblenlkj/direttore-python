@@ -6,8 +6,12 @@ from typing import Any
 
 import pytest
 
-SOURCE_ROOT = Path(__file__).parents[1] / "src"
-sys.path.insert(0, str(SOURCE_ROOT))
+from direttore.core.tracing import SpanNode
+
+EXAMPLE_SOURCE_ROOT = (
+    Path(__file__).parents[2] / "python_direttore_example" / "src"
+)
+sys.path.insert(0, str(EXAMPLE_SOURCE_ROOT))
 
 from modular_monolith.bootstrap.application import (  # noqa: E402
     build_application as build_modular_application,
@@ -45,6 +49,76 @@ def run(coroutine: Coroutine[Any, Any, Any]) -> Any:
     return asyncio.run(coroutine)
 
 
+def trace_names(root: SpanNode) -> list[str]:
+    return [
+        root.name,
+        *(name for child in root.children for name in trace_names(child)),
+    ]
+
+
+def test_simple_service_validation_writes_handler_resolution_report(
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "simple_validation_results.md"
+
+    build_simple_application().application.validate(report_path)
+
+    report = report_path.read_text(encoding="utf-8")
+    assert report.startswith("# Context: simple_service\n")
+    assert "## Use case handlers" in report
+    assert "2. Handler: simple_service.application.inventory.ReceiveStockHandler" in report
+    assert "Registered by key: warehouse.receive-stock.v1" in report
+    assert (
+        "Registered by saga key: warehouse.receive-stock.compensation.v1"
+        in report
+    )
+    assert "client: simple_service.application.ports.clients.StockReceiptClient" in report
+    assert "Source: container" in report
+    assert (
+        "Implementation: "
+        "simple_service.adapters.outbound.clients.RecordingStockReceiptClient"
+        in report
+    )
+    assert "## Event handlers" in report
+    assert "1. Handler: simple_service.application.events.RecordStockReceivedHandler" in report
+    assert "Cache: application (cached)" in report
+    assert "Kind:" not in report
+
+
+def test_modular_validation_reports_execution_override_and_cache_policy(
+    tmp_path: Path,
+) -> None:
+    report_path = tmp_path / "modular_validation_results.md"
+
+    build_modular_application().application.validate(report_path)
+
+    report = report_path.read_text(encoding="utf-8")
+    assert report.startswith("# Context: warehouse\n")
+    assert "\n# Context: orders\n" in report
+    assert "## Use case handlers" in report
+    assert "1. Handler: modular_monolith.contexts.orders.application.use_cases.PlaceOrderHandler" in report
+    assert "Registered by key: orders.place-order.v1" in report
+    assert (
+        "warehouse: modular_monolith.contexts.orders.application.ports."
+        "warehouse_context_client.WarehouseContextClient"
+        in report
+    )
+    assert "Source: execution override" in report
+    assert (
+        "Implementation: modular_monolith.contexts.orders.adapters."
+        "in_process_warehouse_context_client.InProcessWarehouseContextClient"
+        in report
+    )
+    assert "Cache: execution (not cached)" in report
+    assert (
+        "1. Handler: modular_monolith.contexts.orders.application.events."
+        "RecordOrderPlacedHandler"
+        in report
+    )
+    assert "## Event handlers" in report
+    assert "Kind:" not in report
+
+
 def test_simple_service_runs_direct_key_operation_and_saga_flows() -> None:
     example = build_simple_application()
 
@@ -60,11 +134,21 @@ def test_simple_service_runs_direct_key_operation_and_saga_flows() -> None:
             {"order_id": "O-100", "product_id": "P-100", "quantity": 3},
         )
         access_start = len(example.database.access_log)
-        order = await example.application.handle_operation("place-100")
+        order = await example.application.handle_operation(
+            "place-100",
+            trace={"trace_id": "simple-place-100"},
+        )
 
         assert order.status == "placed"
         operation_accesses = example.database.access_log[access_start:]
         assert len({session_id for _, session_id in operation_accesses}) == 1
+        operation_trace = example.tracer.completed_traces[-1]
+        assert operation_trace.trace == {"trace_id": "simple-place-100"}
+        assert operation_trace.status == "OK"
+        assert any(
+            "RecordOrderPlacedHandler" in name
+            for name in trace_names(operation_trace)
+        )
         assert (await example.application.handle(GetStockCommand("P-100"))).quantity == 7
 
         with pytest.raises(InsufficientStockError):
@@ -102,7 +186,8 @@ def test_modular_monolith_reuses_one_session_across_context_uows() -> None:
 
         access_start = len(example.database.access_log)
         order = await example.application.handle(
-            ModularPlaceOrderCommand("O-100", "P-100", 3)
+            ModularPlaceOrderCommand("O-100", "P-100", 3),
+            trace={"trace_id": "modular-place-100"},
         )
         assert order.status == "placed"
 
@@ -111,6 +196,10 @@ def test_modular_monolith_reuses_one_session_across_context_uows() -> None:
         assert "warehouse.products.reserve" in operation_names
         assert "orders.orders.add" in operation_names
         assert len({session_id for _, session_id in operation_accesses}) == 1
+        operation_trace = example.tracer.completed_traces[-1]
+        assert operation_trace.trace == {"trace_id": "modular-place-100"}
+        assert operation_trace.status == "OK"
+        assert any("runtime.invoke" in name for name in trace_names(operation_trace))
         assert (
             await example.application.handle(ModularGetStockCommand("P-100"))
         ).quantity == 7

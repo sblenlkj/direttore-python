@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from os import PathLike
 from typing import Any
 
 from direttore.application.modular_monolith.config import (
@@ -36,6 +37,7 @@ from direttore.core.registries.event_handler_registry import EventHandlerRegistr
 from direttore.core.registries.use_case_handler_registry import UseCaseHandlerRegistry
 from direttore.core.resolvers.event_handler_resolver import EventHandlerResolver
 from direttore.core.resolvers.use_case_handler_resolver import UseCaseHandlerResolver
+from direttore.core.resolvers.validation_report import write_validation_report
 
 
 class ModularMonolithSlotCreator[InputT, TraceT](
@@ -60,6 +62,11 @@ class ModularMonolithSlotCreator[InputT, TraceT](
             if execution_dependencies_registry is not None
             else set()
         )
+        dependency_implementations = (
+            execution_dependencies_registry.registered_dependency_implementations()
+            if execution_dependencies_registry is not None
+            else {}
+        )
         self.use_case_registry: UseCaseHandlerRegistry[
             Lifecycle[InputT | None, Any]
         ] = UseCaseHandlerRegistry.merge_many(
@@ -82,6 +89,7 @@ class ModularMonolithSlotCreator[InputT, TraceT](
             registry=self.use_case_registry,
             container=container,
             execution_dependency_types=dependency_types,
+            execution_dependency_implementations=dependency_implementations,
         )
         self.event_dispatcher = self._build_event_dispatcher(
             config.contexts, dependency_types
@@ -117,10 +125,36 @@ class ModularMonolithSlotCreator[InputT, TraceT](
             max_processed_events=self.config.use_case_execution.max_processed_events,
         )
 
-    def validate(self) -> None:
+    def validate(
+        self,
+        validation_results_path: str | PathLike[str] | None = None,
+    ) -> None:
         self.use_case_resolver.validate()
         if self.event_dispatcher is not None:
             self.event_dispatcher.validate_event_handlers()
+
+        if validation_results_path is None:
+            return
+
+        descriptions = self.use_case_resolver.describe_resolutions()
+        if self.event_dispatcher is not None:
+            descriptions.extend(
+                self.event_dispatcher.resolver.describe_resolutions()
+            )
+        context_names: list[str] = []
+        for context in self.config.contexts:
+            context_names.append(
+                context.use_case_registry.source_name or "<unnamed>"
+            )
+            if context.event_registry is not None:
+                context_names.append(
+                    context.event_registry.source_name or "<unnamed>"
+                )
+        write_validation_report(
+            validation_results_path,
+            descriptions,
+            context_names=dict.fromkeys(context_names),
+        )
 
     @staticmethod
     def _merge_event_registries(
@@ -157,6 +191,11 @@ class ModularMonolithSlotCreator[InputT, TraceT](
                 registry=self.event_registry,
                 container=self.container,
                 execution_dependency_types=dependency_types,
+                execution_dependency_implementations=(
+                    self.execution_dependencies_registry.registered_dependency_implementations()
+                    if self.execution_dependencies_registry is not None
+                    else {}
+                ),
             ),
             event_uow_routing=routing,
         )

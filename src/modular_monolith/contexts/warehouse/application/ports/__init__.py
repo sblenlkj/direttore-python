@@ -1,2 +1,0 @@
-"""Warehouse application ports."""
-

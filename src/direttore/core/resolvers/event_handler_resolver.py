@@ -18,6 +18,9 @@ from direttore.core.resolvers.base_handler_resolver import (
 from direttore.core.resolvers.resolved_handlers import (
     ResolvedHandler,
 )
+from direttore.core.resolvers.validation_report import (
+    HandlerResolutionDescription,
+)
 
 
 class EventHandlerResolver(
@@ -29,6 +32,9 @@ class EventHandlerResolver(
         container: Container,
         *,
         execution_dependency_types: set[type[Any]] | None = None,
+        execution_dependency_implementations: Mapping[
+            type[Any], type[Any] | None
+        ] | None = None,
         warm_up: bool = True,
         validate: bool = True,
         ready_only: bool = True,
@@ -36,6 +42,9 @@ class EventHandlerResolver(
         super().__init__(
             container=container,
             execution_dependency_types=execution_dependency_types or set(),
+            execution_dependency_implementations=(
+                execution_dependency_implementations
+            ),
         )
         self.registry = registry
         self.ready_only = ready_only
@@ -51,6 +60,12 @@ class EventHandlerResolver(
     def validate(self) -> None:
         self.validate_handlers(
             registrations=self.registry.iter_registrations(),
+        )
+
+    def describe_resolutions(self) -> list[HandlerResolutionDescription]:
+        return self.describe_handler_resolutions(
+            registrations=self.registry.iter_registrations(),
+            handler_kind="event",
         )
 
     def resolve(

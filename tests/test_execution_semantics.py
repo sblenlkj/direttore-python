@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -219,6 +220,21 @@ def build(mode, *, tracing=False):
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def test_validation_report_includes_use_case_and_event_saga_keys(
+    tmp_path: Path,
+) -> None:
+    from direttore.core.contracts.handlers import UseCaseHandlerExecutionMode
+
+    app, _, _, _ = build(UseCaseHandlerExecutionMode.IN_TRANSACTION)
+    report_path = tmp_path / "validation_results.md"
+
+    app.validate(report_path)
+
+    report = report_path.read_text(encoding="utf-8")
+    assert "Registered by saga key: execute.v1" in report
+    assert "Registered by saga key: happened.v1" in report
 
 
 @pytest.mark.parametrize(

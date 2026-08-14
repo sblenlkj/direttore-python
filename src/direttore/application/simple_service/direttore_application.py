@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from os import PathLike
 from typing import Any
 
 from direttore.application.simple_service.execution_slot import (
@@ -104,8 +105,11 @@ class SimpleServiceDirettoreApplication[InputT, TraceT]:
         async with self.transactional_slot() as slot:
             await slot.compensate_saga(saga_id=saga_id, trace=trace)
 
-    def validate(self) -> None:
-        self.slot_provider.slot_creator.validate()
+    def validate(
+        self,
+        validation_results_path: str | PathLike[str] | None = None,
+    ) -> None:
+        self.slot_provider.slot_creator.validate(validation_results_path)
 
     def slot_provider_stats(self) -> ExecutionSlotProviderStats:
         return self.slot_provider.stats()

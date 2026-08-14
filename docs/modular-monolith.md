@@ -140,8 +140,14 @@ slot_creator = ModularMonolithSlotCreator(
 )
 provider = FactoryExecutionSlotProvider(slot_creator=slot_creator)
 application = ModularMonolithDirettoreApplication(slot_provider=provider)
-application.validate()
+application.validate("validation_results.md")
 ```
+
+The optional report is grouped by each registry's `source_name`. Container
+adapters appear as application-cached dependencies; runtime-backed context
+clients appear as execution overrides, and handlers that request them are
+marked `Cache: execution (not cached)`. Calling `application.validate()` with
+no path keeps the previous validation-only behavior.
 
 At least one context is required.
 

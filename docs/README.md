@@ -27,8 +27,9 @@ executable Jupyter examples.
   application execution.
 - [Modular-monolith guide](modular-monolith.md) — bounded contexts, UoW routing,
   the coordinator, and execution-scoped in-process dependencies.
-- [Warehouse examples](../examples/README.md) — runnable simple-service and
-  modular-monolith implementations with Jupyter walkthroughs.
+- [Warehouse examples](../../python_direttore_example/examples/README.md) —
+  runnable simple-service and modular-monolith implementations with Jupyter
+  walkthroughs in the standalone example project.
 
 ## Mental model
 
@@ -605,6 +606,68 @@ validation entry point as well. Handlers that use modular execution-scoped
 dependencies are created for the current runtime instead of being cached
 globally.
 
+### Handler-resolution validation report
+
+Pass a filesystem path to `validate` when startup diagnostics should also be
+written to a Markdown file:
+
+```python
+from pathlib import Path
+
+validation_results_path = Path.cwd() / "validation_results.md"
+application.validate(validation_results_path)
+```
+
+Normal validation still runs first. If any required dependency cannot be
+resolved, `HandlerValidationError` is raised and no success report is written.
+When validation succeeds, the file is replaced with a deterministic report
+containing:
+
+- a level-one `# Context:` heading for each registry `source_name`;
+- separate level-two headings for use-case and event handlers;
+- a numbered list of handlers in each section;
+- use-case registration keys and saga keys when configured;
+- event-handler saga keys when configured;
+- whether the handler is cached at application scope or created for each
+  modular execution;
+- every constructor parameter's port type, resolution source, and concrete
+  adapter type;
+- constructor defaults when a parameter is resolved by its default value.
+
+For example, an application-container dependency is rendered as:
+
+```text
+# Context: warehouse
+
+## Use case handlers
+
+1. Handler: warehouse.application.receive_stock.ReceiveStockHandler
+   Cache: application (cached)
+   Registered by key: warehouse.receive-stock.v1
+   Registered by saga key: warehouse.receive-stock.compensation.v1
+   Dependencies:
+   - client: warehouse.application.ports.StockReceiptClient
+     Source: container
+     Implementation: warehouse.adapters.http.HttpStockReceiptClient
+```
+
+A modular execution dependency is rendered with `Source: execution override`
+and `Cache: execution (not cached)`. Supply its concrete adapter type when the
+factory is registered so the report can name that implementation without
+creating a runtime during validation:
+
+```python
+execution_dependencies.register(
+    dependency_type=WarehouseContextClient,
+    factory=lambda context: InProcessWarehouseContextClient(context.runtime),
+    implementation_type=InProcessWarehouseContextClient,
+)
+```
+
+`implementation_type` is reporting metadata; the factory remains responsible
+for creating the actual execution-scoped object. When it is omitted, the
+report uses `<execution dependency factory result>` as the implementation.
+
 ## Lifecycle context (the execution cycle)
 
 `Lifecycle[InputT, LifecycleContextT]` converts optional operation input into a
@@ -885,6 +948,25 @@ Direttore includes logging and recording implementations under
 `direttore.core.tracing`. A production integration can implement `Span` and
 `SpanFactory` for its tracing backend. When no factory is configured, all span
 values are `None` and execution continues normally.
+
+`LoggingSpanFactory` writes span starts, finishes, attributes, events, and
+failures as they happen. `RecordingSpanFactory` builds a `SpanNode` tree in
+memory and publishes it to `completed_traces` only after the root span exits.
+It can also call `on_trace_complete` and optionally log one rendered tree at
+that same point. The recording model retains the supplied trace value, span
+attributes, span events, child spans, duration, status, and failure type.
+
+```python
+from direttore.core.tracing import RecordingSpanFactory, render_trace
+
+tracer: RecordingSpanFactory[dict[str, str]] = RecordingSpanFactory(
+    log_on_exit=False
+)
+
+# Configure tracer as the slot creator's span_factory, execute an operation,
+# then inspect only completed roots.
+print(render_trace(tracer.completed_traces[-1]))
+```
 
 ## Local saga compensation
 

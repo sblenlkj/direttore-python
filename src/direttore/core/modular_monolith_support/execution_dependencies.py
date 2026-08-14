@@ -54,6 +54,7 @@ type ModularMonolithExecutionDependencyFactory[DependencyT] = Callable[
 class ModularMonolithExecutionDependencyRegistration:
     dependency_type: type[Any]
     factory: ModularMonolithExecutionDependencyFactory[Any]
+    implementation_type: type[Any] | None = None
 
 
 class ModularMonolithExecutionDependencyRegistry:
@@ -84,6 +85,8 @@ class ModularMonolithExecutionDependencyRegistry:
     def decorator_register[DependencyT](
         self,
         dependency_type: type[DependencyT],
+        *,
+        implementation_type: type[DependencyT] | None = None,
     ) -> Callable[
         [ModularMonolithExecutionDependencyFactory[DependencyT]],
         ModularMonolithExecutionDependencyFactory[DependencyT],
@@ -96,6 +99,7 @@ class ModularMonolithExecutionDependencyRegistry:
             self.register(
                 dependency_type=dependency_type,
                 factory=factory,
+                implementation_type=implementation_type,
             )
 
             return factory
@@ -107,8 +111,16 @@ class ModularMonolithExecutionDependencyRegistry:
         *,
         dependency_type: type[DependencyT],
         factory: ModularMonolithExecutionDependencyFactory[DependencyT],
+        implementation_type: type[DependencyT] | None = None,
     ) -> None:
         self._validate_dependency_type(dependency_type)
+        if implementation_type is not None and not isinstance(
+            implementation_type, type
+        ):
+            raise TypeError(
+                "Execution dependency implementation type must be a type. "
+                f"Got {implementation_type!r}."
+            )
 
         if dependency_type in self._registrations:
             raise ValueError(
@@ -124,6 +136,7 @@ class ModularMonolithExecutionDependencyRegistry:
                     ModularMonolithExecutionDependencyFactory[Any],
                     factory,
                 ),
+                implementation_type=implementation_type,
             )
         )
 
@@ -139,6 +152,14 @@ class ModularMonolithExecutionDependencyRegistry:
 
     def registered_dependency_types(self) -> set[type[Any]]:
         return set(self._registrations.keys())
+
+    def registered_dependency_implementations(
+        self,
+    ) -> Mapping[type[Any], type[Any] | None]:
+        return {
+            dependency_type: registration.implementation_type
+            for dependency_type, registration in self._registrations.items()
+        }
 
     def _validate_dependency_type(
         self,

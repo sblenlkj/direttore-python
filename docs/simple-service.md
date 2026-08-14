@@ -64,8 +64,13 @@ slot_creator = SimpleServiceSlotCreator(
 )
 slot_provider = FactoryExecutionSlotProvider(slot_creator=slot_creator)
 application = SimpleServiceDirettoreApplication(slot_provider=slot_provider)
-application.validate()
+application.validate("validation_results.md")
 ```
+
+The optional path produces a context-grouped report of all use-case and event
+handlers, their constructor port-to-adapter bindings, and whether each handler
+is cached. Calling `application.validate()` without a path performs the same
+validation without writing a report.
 
 The important ownership boundary is that `resource_holder_factory` returns a
 new holder for each newly created physical slot. The UoW factory receives that
