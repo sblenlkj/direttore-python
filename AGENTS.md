@@ -92,5 +92,11 @@ rolls back.
 1. Inspect both application variants and public exports.
 2. Preserve both typed application facades and the explicit lease pipeline.
 3. Add focused tests for ownership, failure, cleanup, and ordering.
-4. Update `__init__.py` exports and migration docs.
+4. Update `__init__.py` exports and durable documentation only when the public API or documented behavior actually changes; do not create migration/report files merely because a task completed.
 5. Run pytest, Ruff format/lint, Pyright, and stale-reference searches.
+
+## Completion reports
+
+For every completed repository task that changed code, tests, documentation, examples, benchmarks, or project structure, use the repository skill at `.agents/skills/final-report/SKILL.md` for the final handoff report.
+
+Completion reports belong only under `artifacts/` and use the filename form `YYYY-MM-DD-<task-slug>-report.md`. Do not create task-specific refactor, migration, benchmark, or completion-report Markdown files in the repository root. Existing durable documents such as `MIGRATION.md`, `README.md`, and files under `docs/` are updated only when their actual subject matter changes.

@@ -143,7 +143,7 @@ passed
 
 ## Migration guide
 
-See [MIGRATION.md](MIGRATION.md). In summary, create one holder per physical
+See [MIGRATION.md](../MIGRATION.md). In summary, create one holder per physical
 slot, construct all UoWs against it, choose read/write intent through the UoW,
 and replace any direct engine/pool use with application calls or an explicit
 `director.slot()` lease.

@@ -273,5 +273,7 @@ uv run ruff check src tests
 uvx pyright src
 ```
 
-See [slot_and_slot_lease.md](slot_and_slot_lease.md),
-[MIGRATION.md](MIGRATION.md), and [REFACTOR_REPORT.md](REFACTOR_REPORT.md).
+See [slot_and_slot_lease.md](slot_and_slot_lease.md) and
+[MIGRATION.md](MIGRATION.md). Historical task-completion reports are kept under
+[`artifacts/`](artifacts/), including the
+[slot-centric refactor report](artifacts/2026-08-03-slot-centric-refactor-report.md).

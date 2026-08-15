@@ -947,7 +947,9 @@ trace object or the factory.
 Direttore includes logging and recording implementations under
 `direttore.core.tracing`. A production integration can implement `Span` and
 `SpanFactory` for its tracing backend. When no factory is configured, all span
-values are `None` and execution continues normally.
+values are `None` and execution continues normally. Span context managers must
+return `False` from `__aexit__` so tracing never suppresses application
+exceptions.
 
 `LoggingSpanFactory` writes span starts, finishes, attributes, events, and
 failures as they happen. `RecordingSpanFactory` builds a `SpanNode` tree in
@@ -1183,7 +1185,10 @@ receives its ordinary `result`, but no saga entry is recorded.
 Before committing business resources, Direttore calls the configured journal
 to save the collected entries. Journal persistence and business-resource
 commit are not a distributed atomic transaction; the concrete infrastructure
-must define its own failure-recovery policy.
+must define its own failure-recovery policy. A SQL-backed journal can be atomic
+with business state only when it uses the same session. With multiple
+resources, journal persistence is atomic only relative to the resource used by
+the journal; in-memory and Redis journals are not atomic with SQL state.
 
 ### Run compensation
 
